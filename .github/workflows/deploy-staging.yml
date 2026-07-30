@@ -41,6 +41,11 @@ jobs:
             --template-file infra/main.bicep \
             --parameters infra/staging.bicepparam
 
+      # Lockfiles are intentionally untracked in git (see .gitignore); the
+      # container build needs one, so the pipeline generates it fresh here.
+      - name: Generate lockfile for container build
+        run: npm install --package-lock-only --no-audit --no-fund
+
       - name: Build and deploy web container
         run: |
           az extension add --name containerapp --upgrade
