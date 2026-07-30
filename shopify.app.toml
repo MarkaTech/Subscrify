@@ -1,0 +1,53 @@
+# Shopify app configuration for Subscrify.
+# App: Subscrify (Dev Dashboard app ID 403702841345, handle subscrify-1)
+# Partner org: MARKA MODERN RETAIL PRIVATE LIMITED
+# Dev store: subscrify-test.myshopify.com
+
+client_id = "fc17a27061513df7a7c4dda09476d3cb"
+name = "Subscrify"
+handle = "subscrify-1"
+application_url = "https://example.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+dev_store_url = "subscrify-test.myshopify.com"
+include_config_on_deploy = true
+
+[access_scopes]
+# read_customer_payment_methods / *_own_subscription_contracts are protected
+# scopes — access granted for this app on 2026-07-30 via the Partner Dashboard.
+scopes = "write_products,write_purchase_options,read_customer_payment_methods,read_own_subscription_contracts,write_own_subscription_contracts"
+
+[webhooks]
+api_version = "2026-07"
+
+  # Handled by: /app/routes/webhooks.app.uninstalled.tsx
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/app/uninstalled"
+  topics = ["app/uninstalled"]
+
+  # Handled by: /app/routes/webhooks.app.scopes_update.tsx
+  [[webhooks.subscriptions]]
+  topics = ["app/scopes_update"]
+  uri = "/webhooks/app/scopes_update"
+
+  # Mandatory privacy compliance topics for public apps.
+  # Handled by: /app/routes/webhooks.customers.data_request.tsx etc.
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/data_request"
+  compliance_topics = ["customers/data_request"]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/customers/redact"
+  compliance_topics = ["customers/redact"]
+
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/shop/redact"
+  compliance_topics = ["shop/redact"]
+
+[auth]
+redirect_urls = ["https://example.com/auth/callback"]
+
+[pos]
+embedded = false

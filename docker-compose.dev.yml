@@ -1,0 +1,15 @@
+# Local dev Postgres — mirrors Azure Database for PostgreSQL (16).
+# Usage: docker compose -f docker-compose.dev.yml up -d
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: subscrify
+      POSTGRES_PASSWORD: subscrify
+      POSTGRES_DB: subscrify_dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - subscrify_pgdata:/var/lib/postgresql/data
+volumes:
+  subscrify_pgdata:
