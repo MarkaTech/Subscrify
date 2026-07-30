@@ -1,0 +1,14 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "Subscrify purchase options"
+handle = "subscrify-purchase-options"
+type = "ui_extension"
+
+  [[extensions.targeting]]
+  module = "./src/ActionExtension.jsx"
+  target = "admin.product-purchase-option.action.render"
+
+  [[extensions.targeting]]
+  module = "./src/ActionExtension.jsx"
+  target = "admin.product-variant-purchase-option.action.render"

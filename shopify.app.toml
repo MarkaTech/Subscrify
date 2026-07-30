@@ -6,7 +6,7 @@
 client_id = "fc17a27061513df7a7c4dda09476d3cb"
 name = "Subscrify"
 handle = "subscrify-1"
-application_url = "https://example.com"
+application_url = "https://subscrify-staging-web.victoriousriver-73bb1ad1.centralindia.azurecontainerapps.io"
 embedded = true
 
 [build]
@@ -47,7 +47,9 @@ api_version = "2026-07"
   compliance_topics = ["shop/redact"]
 
 [auth]
-redirect_urls = ["https://example.com/auth/callback"]
+redirect_urls = [
+  "https://subscrify-staging-web.victoriousriver-73bb1ad1.centralindia.azurecontainerapps.io/auth/callback",
+]
 
 [pos]
 embedded = false

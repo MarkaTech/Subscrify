@@ -18,6 +18,19 @@ param postgresAdminPassword string
 @description('Container image for the Remix web app. Placeholder until first app build.')
 param webImage string = 'mcr.microsoft.com/azuredocs/containerapps-helloworld:latest'
 
+@description('Shopify app client ID (public identifier).')
+param shopifyApiKey string = ''
+
+@description('Shopify app client secret — supplied at deploy time from CI secrets.')
+@secure()
+param shopifyApiSecret string = ''
+
+@description('Public HTTPS URL of this app (the container app ingress FQDN).')
+param appUrl string = ''
+
+@description('Shopify access scopes, mirrored from shopify.app.toml.')
+param shopifyScopes string = 'write_products,write_purchase_options,read_customer_payment_methods,read_own_subscription_contracts,write_own_subscription_contracts'
+
 @description('Deploy the worker container app (billing engine — Phase 4).')
 param deployWorker bool = false
 
@@ -181,6 +194,10 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'database-url'
           value: 'postgresql://subscrify:${postgresAdminPassword}@${postgres.properties.fullyQualifiedDomainName}:5432/subscrify?sslmode=require'
         }
+        {
+          name: 'shopify-api-secret'
+          value: shopifyApiSecret
+        }
       ]
     }
     template: {
@@ -194,8 +211,13 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
           }
           env: [
             { name: 'DATABASE_URL', secretRef: 'database-url' }
+            { name: 'SHOPIFY_API_KEY', value: shopifyApiKey }
+            { name: 'SHOPIFY_API_SECRET', secretRef: 'shopify-api-secret' }
+            { name: 'SHOPIFY_APP_URL', value: appUrl }
+            { name: 'SCOPES', value: shopifyScopes }
             { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
             { name: 'NODE_ENV', value: 'production' }
+            { name: 'PORT', value: '3000' }
           ]
         }
       ]
