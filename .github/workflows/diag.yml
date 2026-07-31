@@ -49,6 +49,32 @@ jobs:
           az postgres flexible-server show -n subscrify-staging-pg -g subscrify-staging \
             --query "{state:state,version:version,sku:sku.name}" -o table
 
+      # Phase 4 (billing worker) diagnostics — deployWorker just flipped to
+      # true for the first time, so these check whether the new Container
+      # App resource actually came up (and whether its fresh system identity
+      # can pull from ACR, which the webApp's identity was granted manually
+      # and out-of-band — see main.bicep's containerRegistryServer comment).
+      - name: Worker app state
+        run: |
+          az containerapp show -n subscrify-staging-worker -g subscrify-staging \
+            --query "{provisioningState:properties.provisioningState,runningStatus:properties.runningStatus,principalId:identity.principalId}" -o json || true
+
+      - name: Worker revisions
+        run: |
+          az containerapp revision list -n subscrify-staging-worker -g subscrify-staging \
+            --query "[].{name:name,active:properties.active,state:properties.runningState,healthState:properties.healthState,created:properties.createdTime}" -o table || true
+
+      - name: Worker replica detail
+        run: |
+          az containerapp replica list -n subscrify-staging-worker -g subscrify-staging -o json || true
+
+      - name: ACR role assignments (who can pull)
+        run: |
+          ACR_ID=$(az acr show --name caca4d77ed2eacr --query id -o tsv)
+          echo "ACR resource id: $ACR_ID"
+          az role assignment list --scope "$ACR_ID" \
+            --query "[].{principalId:principalId,role:roleDefinitionName,principalType:principalType}" -o table
+
       - name: System logs (container lifecycle)
         run: |
           az containerapp logs show -n subscrify-staging-web -g subscrify-staging \
