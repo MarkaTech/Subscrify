@@ -28,4 +28,4 @@ jobs:
       - name: Deploy app configuration and extensions
         env:
           SHOPIFY_APP_AUTOMATION_TOKEN: ${{ secrets.SHOPIFY_APP_AUTOMATION_TOKEN }}
-        run: shopify app deploy --force --allow-updates
+        run: shopify app deploy --allow-updates
