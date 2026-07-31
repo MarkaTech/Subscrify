@@ -14,9 +14,14 @@ automatically_update_urls_on_dev = true
 dev_store_url = "subscrify-test.myshopify.com"
 
 [access_scopes]
-# read_customer_payment_methods / *_own_subscription_contracts are protected
-# scopes — access granted for this app on 2026-07-30 via the Partner Dashboard.
-scopes = "write_products,write_purchase_options,read_customer_payment_methods,read_own_subscription_contracts,write_own_subscription_contracts"
+# read_customer_payment_methods / *_own_subscription_contracts / read_customers /
+# read_orders are protected scopes — Protected Customer Data access (Name, Email,
+# Address, Phone) was granted for this app on 2026-07-30 via the Partner
+# Dashboard, which is what makes read_customers/read_orders usable here: the
+# scopes alone are useless for PII fields without that separate approval.
+# Adding these two (2026-07-31) lets contracts.api.server.ts's "rich" query
+# populate customer name/email and origin order instead of falling back.
+scopes = "write_products,write_purchase_options,read_customer_payment_methods,read_own_subscription_contracts,write_own_subscription_contracts,read_customers,read_orders"
 
 [webhooks]
 api_version = "2026-07"

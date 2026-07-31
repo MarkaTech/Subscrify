@@ -32,7 +32,7 @@ param appUrl string = ''
 param containerRegistryServer string = 'caca4d77ed2eacr.azurecr.io'
 
 @description('Shopify access scopes, mirrored from shopify.app.toml.')
-param shopifyScopes string = 'write_products,write_purchase_options,read_customer_payment_methods,read_own_subscription_contracts,write_own_subscription_contracts'
+param shopifyScopes string = 'write_products,write_purchase_options,read_customer_payment_methods,read_own_subscription_contracts,write_own_subscription_contracts,read_customers,read_orders'
 
 @description('Deploy the worker container app (billing engine — Phase 4).')
 param deployWorker bool = false
