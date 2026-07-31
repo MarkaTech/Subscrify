@@ -341,6 +341,33 @@ resource workerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployWorker) 
   }
 }
 
+// The web app's system identity was granted AcrPull manually, out-of-band,
+// before this template existed (see containerRegistryServer's @description).
+// The worker app is a genuinely new resource with its own fresh identity —
+// nothing grants that one AcrPull unless this template does it, so its first
+// deploy would otherwise sit stuck on an unauthorized image pull forever.
+// Declaring it here means every future new-identity Container App in this
+// template gets pull access automatically, not via another manual step.
+resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = if (deployWorker && !empty(containerRegistryServer)) {
+  name: split(containerRegistryServer, '.')[0]
+}
+
+var acrPullRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
+
+resource workerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployWorker && !empty(containerRegistryServer)) {
+  // Guarded by the same `deployWorker` condition as workerApp itself, so
+  // whenever this resource actually deploys, workerApp is guaranteed to
+  // exist too — the null-forgiving `!` just tells Bicep's static analysis
+  // what's already true at runtime.
+  name: guid(acr.id, workerApp!.id, 'AcrPull')
+  scope: acr
+  properties: {
+    principalId: workerApp!.identity.principalId
+    principalType: 'ServicePrincipal'
+    roleDefinitionId: acrPullRoleId
+  }
+}
+
 // ---------------------------------------------------------------- alerts
 resource dlqAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   name: '${prefix}-billing-dlq-alert'
