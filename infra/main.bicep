@@ -28,6 +28,9 @@ param shopifyApiSecret string = ''
 @description('Public HTTPS URL of this app (the container app ingress FQDN).')
 param appUrl string = ''
 
+@description('ACR login server the web image is pulled from (system identity must hold AcrPull).')
+param containerRegistryServer string = 'caca4d77ed2eacr.azurecr.io'
+
 @description('Shopify access scopes, mirrored from shopify.app.toml.')
 param shopifyScopes string = 'write_products,write_purchase_options,read_customer_payment_methods,read_own_subscription_contracts,write_own_subscription_contracts'
 
@@ -189,6 +192,15 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
         targetPort: 3000
         allowInsecure: false
       }
+      // Registry auth for pulling the app image. Without this the revision
+      // dies in ImagePullBackOff — the system identity holds AcrPull, but the
+      // app must still be told to use it for this registry.
+      registries: empty(containerRegistryServer) ? [] : [
+        {
+          server: containerRegistryServer
+          identity: 'system'
+        }
+      ]
       secrets: [
         {
           name: 'database-url'
