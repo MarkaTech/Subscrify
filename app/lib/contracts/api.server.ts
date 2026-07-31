@@ -35,13 +35,16 @@ export interface ContractDetail extends ContractSummary {
   lastPaymentStatus: string | null;
 }
 
-const CONTRACT_FIELDS = `#graphql
+// Customer name/email are Protected Customer Data — until Shopify grants the
+// app that access (Partner Dashboard → API access), requesting them makes the
+// whole query fail. Build the fragment with and without them and fall back.
+const contractFields = (withCustomer: boolean) => `#graphql
   fragment ContractFields on SubscriptionContract {
     id
     status
     createdAt
     nextBillingDate
-    customer { displayName email }
+    ${withCustomer ? "customer { id displayName email }" : "customer { id }"}
     deliveryPolicy { interval intervalCount }
     billingPolicy { interval intervalCount }
     lines(first: 10) {
@@ -67,29 +70,54 @@ function toSummary(node: any): ContractSummary {
   const lineSummary = first
     ? `${first.title}${lines.length > 1 ? ` +${lines.length - 1} more` : ""}`
     : "—";
+  const customerFallback = node.customer?.id
+    ? `Customer #${numericId(node.customer.id)}`
+    : "—";
   return {
     id: node.id,
     numericId: numericId(node.id),
     status: node.status,
     createdAt: node.createdAt,
     nextBillingDate: node.nextBillingDate ?? null,
-    customerName: node.customer?.displayName ?? "—",
+    customerName: node.customer?.displayName ?? customerFallback,
     customerEmail: node.customer?.email ?? null,
     lineSummary,
   };
 }
 
+/** Run the query with customer PII; if denied (no protected-data access yet),
+ *  retry without it rather than failing the page. */
+async function queryWithCustomerFallback(
+  admin: AdminClient,
+  buildQuery: (fields: string) => string,
+  variables?: Record<string, unknown>,
+): Promise<any> {
+  try {
+    const response = await admin.graphql(buildQuery(contractFields(true)), {
+      variables,
+    });
+    const json = await response.json();
+    if (json?.data) return json;
+  } catch {
+    // fall through to the PII-free query
+  }
+  const response = await admin.graphql(buildQuery(contractFields(false)), {
+    variables,
+  });
+  return response.json();
+}
+
 export async function listContracts(admin: AdminClient): Promise<ContractSummary[]> {
-  const response = await admin.graphql(
-    `#graphql
-    ${CONTRACT_FIELDS}
+  const json = await queryWithCustomerFallback(
+    admin,
+    (fields) => `#graphql
+    ${fields}
     query subscrifyContracts {
       subscriptionContracts(first: 50, reverse: true) {
         edges { node { ...ContractFields } }
       }
     }`,
   );
-  const json = await response.json();
   const edges = json?.data?.subscriptionContracts?.edges ?? [];
   return edges.map(({ node }: any) => toSummary(node));
 }
@@ -98,9 +126,10 @@ export async function getContract(
   admin: AdminClient,
   id: string,
 ): Promise<ContractDetail | null> {
-  const response = await admin.graphql(
-    `#graphql
-    ${CONTRACT_FIELDS}
+  const json = await queryWithCustomerFallback(
+    admin,
+    (fields) => `#graphql
+    ${fields}
     query subscrifyGetContract($id: ID!) {
       subscriptionContract(id: $id) {
         ...ContractFields
@@ -108,9 +137,8 @@ export async function getContract(
         lastPaymentStatus
       }
     }`,
-    { variables: { id } },
+    { id },
   );
-  const json = await response.json();
   const node = json?.data?.subscriptionContract;
   if (!node) return null;
   const summary = toSummary(node);
