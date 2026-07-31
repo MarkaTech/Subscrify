@@ -32,33 +32,30 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Deploy infrastructure (Bicep)
-        env:
-          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
-          SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
-        # The Bicep template's webImage param defaults to a hello-world
-        # placeholder; without passing the currently-deployed image, every
-        # infra deploy would reset the app to that placeholder.
-        run: |
-          IMG=$(az containerapp show -n subscrify-staging-web -g subscrify-staging \
-            --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
-          EXTRA=""
-          case "$IMG" in *azurecr.io*) EXTRA="--parameters webImage=$IMG";; esac
-          az deployment group create \
-            --resource-group subscrify-staging \
-            --template-file infra/main.bicep \
-            --parameters infra/staging.bicepparam $EXTRA
-
       # Lockfiles are intentionally untracked in git (see .gitignore); the
       # container build needs one, so the pipeline generates it fresh here.
       - name: Generate lockfile for container build
         run: npm install --package-lock-only --no-audit --no-fund
 
-      - name: Build and deploy web container
+      # Build in ACR (never `az containerapp up` — it manages a container named
+      # after the app, which duplicates the Bicep-defined "web" container and
+      # crash-loops on a port conflict; two containers in one replica share
+      # one network namespace).
+      - name: Build image in ACR
         run: |
-          az extension add --name containerapp --upgrade
-          az containerapp up \
-            --name subscrify-staging-web \
+          az acr build --registry caca4d77ed2eacr \
+            --image subscrify-staging-web:${{ github.sha }} .
+
+      - name: Deploy infrastructure (Bicep)
+        env:
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
+        # Bicep is the single owner of the container app template: exactly one
+        # container named "web", running the image just built. A full template
+        # PUT also strips any stray containers left by older tooling.
+        run: |
+          az deployment group create \
             --resource-group subscrify-staging \
-            --source . \
-            --ingress external --target-port 3000
+            --template-file infra/main.bicep \
+            --parameters infra/staging.bicepparam \
+            --parameters webImage=caca4d77ed2eacr.azurecr.io/subscrify-staging-web:${{ github.sha }}
