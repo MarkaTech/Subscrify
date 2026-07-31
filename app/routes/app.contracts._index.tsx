@@ -6,8 +6,19 @@ import { listContracts } from "../lib/contracts/api.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-  const contracts = await listContracts(admin);
-  return { contracts };
+  try {
+    const contracts = await listContracts(admin);
+    return { contracts, error: null as string | null };
+  } catch (e: any) {
+    // Surface the failure in the UI instead of a blank 500 — this page is
+    // read-only, and a visible reason beats an opaque error boundary.
+    const detail =
+      e?.response?.errors ?? e?.body?.errors ?? e?.graphQLErrors ?? undefined;
+    const error = `${e?.message ?? String(e)}${
+      detail ? ` | ${JSON.stringify(detail).slice(0, 800)}` : ""
+    }`;
+    return { contracts: [], error };
+  }
 };
 
 function formatDate(iso: string | null): string {
@@ -20,10 +31,15 @@ function formatDate(iso: string | null): string {
 }
 
 export default function ContractsIndex() {
-  const { contracts } = useLoaderData<typeof loader>();
+  const { contracts, error } = useLoaderData<typeof loader>();
 
   return (
     <s-page heading="Subscriptions">
+      {error ? (
+        <s-banner tone="critical" heading="Could not load subscriptions">
+          <s-paragraph>{error}</s-paragraph>
+        </s-banner>
+      ) : null}
       {contracts.length === 0 ? (
         <s-section heading="No subscriptions yet">
           <s-paragraph>
