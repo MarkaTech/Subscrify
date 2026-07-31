@@ -3,7 +3,7 @@ import type {
   HeadersFunction,
   LoaderFunctionArgs,
 } from "react-router";
-import { Link, useFetcher, useLoaderData } from "react-router";
+import { Link, useFetcher, useLoaderData, useNavigate } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { deleteProgram, listPrograms } from "../lib/selling-plans/api.server";
@@ -28,13 +28,20 @@ export const action = async ({ request }: ActionFunctionArgs) => {
 export default function ProgramsIndex() {
   const { programs } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
+  const navigate = useNavigate();
   const deleting = fetcher.state !== "idle";
 
   return (
     <s-page heading="Subscription programs">
-      <s-link slot="primary-action" href="/app/programs/new">
-        <s-button variant="primary">Create program</s-button>
-      </s-link>
+      {/* Never nest s-button inside s-link: the shadow-DOM button swallows
+          the click and the link never fires. Navigate programmatically. */}
+      <s-button
+        slot="primary-action"
+        variant="primary"
+        onClick={() => navigate("/app/programs/new")}
+      >
+        Create program
+      </s-button>
 
       {programs.length === 0 ? (
         <s-section heading="No programs yet">
@@ -43,9 +50,12 @@ export default function ProgramsIndex() {
             example “Subscribe &amp; Save: deliver every 1, 2, or 4 weeks at 10%
             off”. Create your first program and attach it to products.
           </s-paragraph>
-          <s-link href="/app/programs/new">
-            <s-button variant="primary">Create your first program</s-button>
-          </s-link>
+          <s-button
+            variant="primary"
+            onClick={() => navigate("/app/programs/new")}
+          >
+            Create your first program
+          </s-button>
         </s-section>
       ) : (
         <s-section heading={`${programs.length} program(s)`}>
