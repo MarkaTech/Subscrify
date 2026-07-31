@@ -71,7 +71,9 @@ export default function ProgramsIndex() {
               {programs.map((program) => (
                 <s-table-row key={program.id}>
                   <s-table-cell>
-                    <Link to={`/app/programs/${encodeURIComponent(program.id)}`}>
+                    {/* Path carries only the numeric id: encoded slashes in a
+                        gid get decoded by the ingress proxy and 404 the route. */}
+                    <Link to={`/app/programs/${program.id.split("/").pop()}`}>
                       {program.name}
                     </Link>
                   </s-table-cell>

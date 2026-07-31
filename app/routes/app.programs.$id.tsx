@@ -22,9 +22,20 @@ import {
   updateProgram,
 } from "../lib/selling-plans/api.server";
 
+/** URL param is the numeric SellingPlanGroup id (never a full gid — encoded
+ *  slashes get decoded by the ingress proxy and break route matching). */
+function groupGidFromParam(id: string | undefined): string | null {
+  if (!id) return null;
+  if (/^\d+$/.test(id)) return `gid://shopify/SellingPlanGroup/${id}`;
+  // Tolerate a full (possibly encoded) gid from old links.
+  const decoded = decodeURIComponent(id);
+  return /^gid:\/\/shopify\/SellingPlanGroup\/\d+$/.test(decoded) ? decoded : null;
+}
+
 export const loader = async ({ request, params }: LoaderFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-  const program = await getProgram(admin, params.id!);
+  const gid = groupGidFromParam(params.id);
+  const program = gid ? await getProgram(admin, gid) : null;
   if (!program) {
     throw new Response("Program not found", { status: 404 });
   }
@@ -33,7 +44,10 @@ export const loader = async ({ request, params }: LoaderFunctionArgs) => {
 
 export const action = async ({ request, params }: ActionFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-  const groupId = params.id!;
+  const groupId = groupGidFromParam(params.id);
+  if (!groupId) {
+    throw new Response("Program not found", { status: 404 });
+  }
   const form = await request.formData();
   const config = JSON.parse(String(form.get("config") ?? "{}")) as ProgramConfig;
   const planIds = JSON.parse(String(form.get("planIds") ?? "[]")) as Array<string | null>;
