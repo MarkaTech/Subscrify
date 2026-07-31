@@ -1,0 +1,51 @@
+name: Diagnostics (read-only)
+
+# Read-only ops visibility: dumps Container App revision/replica state and
+# recent logs so failures can be diagnosed without portal access.
+# Triggered automatically when this file changes, or manually.
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/diag.yml"
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Revisions
+        run: |
+          az containerapp revision list -n subscrify-staging-web -g subscrify-staging \
+            --query "[].{name:name,active:properties.active,traffic:properties.trafficWeight,replicas:properties.replicas,state:properties.runningState,created:properties.createdTime}" -o table
+
+      - name: Replicas
+        run: |
+          az containerapp replica list -n subscrify-staging-web -g subscrify-staging \
+            --query "[].{name:name,created:properties.createdTime,state:properties.runningState,restarts:properties.containers[0].restartCount,ready:properties.containers[0].ready}" -o table || true
+
+      - name: Postgres state
+        run: |
+          az postgres flexible-server show -n subscrify-staging-pg -g subscrify-staging \
+            --query "{state:state,version:version,sku:sku.name}" -o table
+
+      - name: System logs (container lifecycle)
+        run: |
+          az containerapp logs show -n subscrify-staging-web -g subscrify-staging \
+            --type system --tail 60 || true
+
+      - name: Console logs (app stdout/stderr)
+        run: |
+          az containerapp logs show -n subscrify-staging-web -g subscrify-staging \
+            --type console --tail 150 || true
