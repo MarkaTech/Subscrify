@@ -35,16 +35,17 @@ export interface ContractDetail extends ContractSummary {
   lastPaymentStatus: string | null;
 }
 
-// Customer name/email are Protected Customer Data — until Shopify grants the
-// app that access (Partner Dashboard → API access), requesting them makes the
-// whole query fail. Build the fragment with and without them and fall back.
-const contractFields = (withCustomer: boolean) => `#graphql
+// SubscriptionContract.customer requires the read_customers scope (plus
+// protected-customer-data approval), and originOrder requires read_orders —
+// neither of which this app holds yet. Query rich fields first; if denied,
+// fall back to a scope-free query so the page still renders.
+const contractFields = (rich: boolean) => `#graphql
   fragment ContractFields on SubscriptionContract {
     id
     status
     createdAt
     nextBillingDate
-    ${withCustomer ? "customer { id displayName email }" : "customer { id }"}
+    ${rich ? "customer { id displayName email }" : ""}
     deliveryPolicy { interval intervalCount }
     billingPolicy { interval intervalCount }
     lines(first: 10) {
@@ -85,30 +86,30 @@ function toSummary(node: any): ContractSummary {
   };
 }
 
-/** Run the query with customer PII; if denied (no protected-data access yet),
- *  retry without it rather than failing the page. */
-async function queryWithCustomerFallback(
+/** Run the rich query (customer, origin order); if a scope/PII denial makes it
+ *  fail, retry the scope-free variant rather than failing the page. */
+async function queryWithFallback(
   admin: AdminClient,
-  buildQuery: (fields: string) => string,
+  buildQuery: (fields: string, rich: boolean) => string,
   variables?: Record<string, unknown>,
 ): Promise<any> {
   try {
-    const response = await admin.graphql(buildQuery(contractFields(true)), {
+    const response = await admin.graphql(buildQuery(contractFields(true), true), {
       variables,
     });
     const json = await response.json();
     if (json?.data) return json;
   } catch {
-    // fall through to the PII-free query
+    // fall through to the scope-free query
   }
-  const response = await admin.graphql(buildQuery(contractFields(false)), {
+  const response = await admin.graphql(buildQuery(contractFields(false), false), {
     variables,
   });
   return response.json();
 }
 
 export async function listContracts(admin: AdminClient): Promise<ContractSummary[]> {
-  const json = await queryWithCustomerFallback(
+  const json = await queryWithFallback(
     admin,
     (fields) => `#graphql
     ${fields}
@@ -126,14 +127,14 @@ export async function getContract(
   admin: AdminClient,
   id: string,
 ): Promise<ContractDetail | null> {
-  const json = await queryWithCustomerFallback(
+  const json = await queryWithFallback(
     admin,
-    (fields) => `#graphql
+    (fields, rich) => `#graphql
     ${fields}
     query subscrifyGetContract($id: ID!) {
       subscriptionContract(id: $id) {
         ...ContractFields
-        originOrder { id name }
+        ${rich ? "originOrder { id name }" : ""}
         lastPaymentStatus
       }
     }`,
