@@ -12,7 +12,6 @@ embedded = true
 [build]
 automatically_update_urls_on_dev = true
 dev_store_url = "subscrify-test.myshopify.com"
-include_config_on_deploy = true
 
 [access_scopes]
 # read_customer_payment_methods / *_own_subscription_contracts are protected

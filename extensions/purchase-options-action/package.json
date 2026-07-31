@@ -2,6 +2,7 @@
   "name": "subscrify-purchase-options",
   "private": true,
   "dependencies": {
+    "@preact/signals": "^2.0.0",
     "@shopify/ui-extensions": "~2026.7.0",
     "preact": "^10.10.0"
   }
