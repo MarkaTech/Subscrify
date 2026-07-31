@@ -36,11 +36,18 @@ jobs:
         env:
           POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
           SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
+        # The Bicep template's webImage param defaults to a hello-world
+        # placeholder; without passing the currently-deployed image, every
+        # infra deploy would reset the app to that placeholder.
         run: |
+          IMG=$(az containerapp show -n subscrify-staging-web -g subscrify-staging \
+            --query "properties.template.containers[0].image" -o tsv 2>/dev/null || true)
+          EXTRA=""
+          case "$IMG" in *azurecr.io*) EXTRA="--parameters webImage=$IMG";; esac
           az deployment group create \
             --resource-group subscrify-staging \
             --template-file infra/main.bicep \
-            --parameters infra/staging.bicepparam
+            --parameters infra/staging.bicepparam $EXTRA
 
       # Lockfiles are intentionally untracked in git (see .gitignore); the
       # container build needs one, so the pipeline generates it fresh here.

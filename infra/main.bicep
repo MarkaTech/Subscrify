@@ -222,7 +222,9 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
         }
       ]
       scale: {
-        minReplicas: envName == 'prod' ? 1 : 0
+        // Always keep one replica warm: embedded-admin iframes time out on
+        // cold starts, which reads as a blank app page.
+        minReplicas: 1
         maxReplicas: 4
       }
     }
