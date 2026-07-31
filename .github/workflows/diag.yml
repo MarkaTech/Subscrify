@@ -35,6 +35,15 @@ jobs:
           az containerapp replica list -n subscrify-staging-web -g subscrify-staging \
             --query "[].{name:name,created:properties.createdTime,state:properties.runningState,restarts:properties.containers[0].restartCount,ready:properties.containers[0].ready}" -o table || true
 
+      - name: Replica detail (exit codes / termination reasons)
+        run: |
+          az containerapp replica list -n subscrify-staging-web -g subscrify-staging -o json || true
+
+      - name: App template (env, probes, resources)
+        run: |
+          az containerapp show -n subscrify-staging-web -g subscrify-staging \
+            --query "{env:properties.template.containers[0].env,probes:properties.template.containers[0].probes,resources:properties.template.containers[0].resources,scale:properties.template.scale,secrets:properties.configuration.secrets[].name,activeRevisionsMode:properties.configuration.activeRevisionsMode}" -o json || true
+
       - name: Postgres state
         run: |
           az postgres flexible-server show -n subscrify-staging-pg -g subscrify-staging \
