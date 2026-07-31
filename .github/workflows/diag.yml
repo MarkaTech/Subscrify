@@ -58,3 +58,10 @@ jobs:
         run: |
           az containerapp logs show -n subscrify-staging-web -g subscrify-staging \
             --type console --tail 150 || true
+
+      - name: Error lines (filtered, wide window)
+        run: |
+          az containerapp logs show -n subscrify-staging-web -g subscrify-staging \
+            --type console --tail 500 2>/dev/null \
+            | grep -iE "error|exception|unauthorized|denied|throw" -A4 \
+            | head -120 || true
