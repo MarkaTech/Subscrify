@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { billingAttemptIdempotencyKey } from "./idempotency.server";
+import {
+  billingAttemptIdempotencyKey,
+  billingRetryIdempotencyKey,
+} from "./idempotency.server";
 
 const ref = {
   shop: "subscrify-test.myshopify.com",
@@ -57,5 +60,43 @@ describe("billingAttemptIdempotencyKey", () => {
     expect(() =>
       billingAttemptIdempotencyKey({ ...ref, billingCycleIndex: 1.5 }),
     ).toThrow(/cycle index/);
+  });
+});
+
+describe("billingRetryIdempotencyKey", () => {
+  it("differs from the original attempt key", () => {
+    expect(billingRetryIdempotencyKey(ref, 2)).not.toBe(
+      billingAttemptIdempotencyKey(ref),
+    );
+  });
+
+  it("is deterministic per attempt number", () => {
+    expect(billingRetryIdempotencyKey(ref, 2)).toBe(
+      billingRetryIdempotencyKey({ ...ref }, 2),
+    );
+  });
+
+  it("differs between attempt numbers for the same cycle", () => {
+    expect(billingRetryIdempotencyKey(ref, 2)).not.toBe(
+      billingRetryIdempotencyKey(ref, 3),
+    );
+  });
+
+  it("is built on top of the base key", () => {
+    expect(billingRetryIdempotencyKey(ref, 2)).toBe(
+      "subscrify-v1-subscrify-test.myshopify.com-123-7-retry2",
+    );
+  });
+
+  it("rejects attempt number < 2", () => {
+    expect(() => billingRetryIdempotencyKey(ref, 1)).toThrow(/attempt number/);
+    expect(() => billingRetryIdempotencyKey(ref, 0)).toThrow(/attempt number/);
+    expect(() => billingRetryIdempotencyKey(ref, 1.5)).toThrow(/attempt number/);
+  });
+
+  it("still validates shop/contract/cycle the same way as the base key", () => {
+    expect(() =>
+      billingRetryIdempotencyKey({ ...ref, shop: "not-a-shop.example.com" }, 2),
+    ).toThrow(/invalid shop/);
   });
 });

@@ -1,8 +1,11 @@
-import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
-import { useLoaderData } from "react-router";
+import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
+import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { getContract } from "../lib/contracts/api.server";
+import { forceBillContractNow } from "../lib/billing/run-scheduler.server";
+import { listAttemptsForContract } from "../lib/billing/store.server";
+import db from "../db.server";
 
 /** URL param is the numeric contract id (encoded slashes in a full gid get
  *  decoded by the ingress proxy and break route matching). */
@@ -13,13 +16,29 @@ function contractGidFromParam(id: string | undefined): string | null {
 }
 
 export const loader = async ({ params, request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { session, admin } = await authenticate.admin(request);
   const gid = contractGidFromParam(params.id);
   const contract = gid ? await getContract(admin, gid) : null;
-  if (!contract) {
+  if (!contract || !gid) {
     throw new Response("Subscription not found", { status: 404 });
   }
-  return { contract };
+  const billingAttempts = await listAttemptsForContract(db, session.shop, gid);
+  return { contract, billingAttempts };
+};
+
+/**
+ * "Bill this cycle now" — a merchant-support action (Phase 4 billing
+ * engine). Goes through the real scheduler → Service Bus → worker path
+ * (see forceBillContractNow's doc comment), not a special-cased shortcut.
+ */
+export const action = async ({ params, request }: ActionFunctionArgs) => {
+  const { session, admin } = await authenticate.admin(request);
+  const gid = contractGidFromParam(params.id);
+  if (!gid) {
+    throw new Response("Subscription not found", { status: 404 });
+  }
+  const result = await forceBillContractNow(db, admin, session.shop, gid);
+  return { result };
 };
 
 function formatDate(iso: string | null): string {
@@ -31,14 +50,41 @@ function formatDate(iso: string | null): string {
   });
 }
 
+function formatDateTime(iso: string | Date | null): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function policyText(p: { interval: string; intervalCount: number } | null): string {
   if (!p) return "—";
   const unit = p.interval.toLowerCase();
   return p.intervalCount === 1 ? `Every ${unit}` : `Every ${p.intervalCount} ${unit}s`;
 }
 
+function attemptTone(status: string): "success" | "critical" | "warning" | "info" {
+  switch (status) {
+    case "SUCCEEDED":
+      return "success";
+    case "FAILED":
+    case "DEAD_LETTERED":
+      return "critical";
+    case "REQUIRES_ACTION":
+      return "warning";
+    default:
+      return "info";
+  }
+}
+
 export default function ContractDetail() {
-  const { contract } = useLoaderData<typeof loader>();
+  const { contract, billingAttempts } = useLoaderData<typeof loader>();
+  const fetcher = useFetcher<typeof action>();
+  const result = fetcher.data?.result;
 
   return (
     <s-page heading={`Subscription #${contract.numericId}`}>
@@ -92,6 +138,51 @@ export default function ContractDetail() {
             ))}
           </s-table-body>
         </s-table>
+      </s-section>
+
+      <s-section heading="Billing">
+        <s-button
+          variant="secondary"
+          {...(fetcher.state !== "idle" ? { loading: true } : {})}
+          onClick={() => fetcher.submit(null, { method: "post" })}
+        >
+          Bill next unbilled cycle now
+        </s-button>
+        {result ? (
+          <s-paragraph>
+            {result.outcome === "enqueued" && `Enqueued cycle ${result.cycleIndex} for charging.`}
+            {result.outcome === "already_in_flight" &&
+              `Cycle ${result.cycleIndex} is already enqueued or in progress.`}
+            {result.outcome === "nothing_to_bill" && "Nothing unbilled to charge right now."}
+          </s-paragraph>
+        ) : null}
+
+        {billingAttempts.length > 0 ? (
+          <s-table>
+            <s-table-header-row>
+              <s-table-header>Cycle</s-table-header>
+              <s-table-header>Attempt</s-table-header>
+              <s-table-header>Status</s-table-header>
+              <s-table-header>Error</s-table-header>
+              <s-table-header>Updated</s-table-header>
+            </s-table-header-row>
+            <s-table-body>
+              {billingAttempts.map((a) => (
+                <s-table-row key={a.id}>
+                  <s-table-cell>{a.billingCycleIndex}</s-table-cell>
+                  <s-table-cell>{a.attemptNumber}</s-table-cell>
+                  <s-table-cell>
+                    <s-badge tone={attemptTone(a.status)}>{a.status}</s-badge>
+                  </s-table-cell>
+                  <s-table-cell>{a.errorCode ?? "—"}</s-table-cell>
+                  <s-table-cell>{formatDateTime(a.updatedAt)}</s-table-cell>
+                </s-table-row>
+              ))}
+            </s-table-body>
+          </s-table>
+        ) : (
+          <s-paragraph>No billing attempts recorded yet.</s-paragraph>
+        )}
       </s-section>
     </s-page>
   );

@@ -33,3 +33,48 @@ model Session {
 
   @@index([shop])
 }
+
+// Billing engine (Phase 4) — one row per (shop, contract, cycle, attempt).
+//
+// This is the local half of invariant #1 (never overbill): idempotencyKey is
+// unique, so a second attempt to enqueue the same charge fails the insert
+// instead of sending a second message. It's a wall alongside — not instead
+// of — Service Bus's own duplicate detection on the billing-attempts queue
+// and Shopify's idempotencyKey on the charge mutation itself; any one of the
+// three stopping a duplicate is enough, and normally more than one will.
+model BillingCycleAttempt {
+  id                      String    @id @default(cuid())
+  // invariant #2 (shop-scoped): every query against this table filters by
+  // shop; nothing here is ever read or written across shops.
+  shop                    String
+  subscriptionContractGid String
+  billingCycleIndex       Int
+  // 1 = the original attempt; 2+ = dunning retries (see dunning.server.ts).
+  attemptNumber           Int       @default(1)
+  idempotencyKey          String    @unique
+
+  // ENQUEUED -> CHARGING -> SUCCEEDED
+  //                       -> FAILED -> (dunning schedules a new row, attemptNumber+1)
+  //                       -> REQUIRES_ACTION (3-D Secure challenge, unresolved)
+  //                       -> DEAD_LETTERED (Service Bus gave up redelivering the message itself)
+  status                  String    @default("ENQUEUED")
+
+  shopifyBillingAttemptGid String?
+  errorCode               String?
+  errorMessage            String?
+  // Dunning: when a FAILED/REQUIRES_ACTION attempt should be retried, and
+  // whether that retry has been enqueued yet.
+  nextRetryAt             DateTime?
+
+  enqueuedAt              DateTime  @default(now())
+  completedAt             DateTime?
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
+
+  // Belt-and-suspenders alongside idempotencyKey: the same (shop, contract,
+  // cycle, attempt) can never have two rows even if a caller derived the key
+  // independently and made a mistake doing so.
+  @@unique([shop, subscriptionContractGid, billingCycleIndex, attemptNumber])
+  @@index([shop])
+  @@index([status, nextRetryAt])
+}

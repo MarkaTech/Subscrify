@@ -5,6 +5,12 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { type EntryContext } from "react-router";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
+import { startBillingSchedulerLoop } from "./lib/billing/schedule-loop.server";
+
+// Runs once per process boot (this module is the server's single entry
+// point) — see schedule-loop.server.ts for why the billing scheduler lives
+// here rather than in the worker.
+startBillingSchedulerLoop();
 
 export const streamTimeout = 5000;
 

@@ -48,6 +48,30 @@ export function billingAttemptIdempotencyKey(ref: BillingCycleRef): string {
   return `subscrify-${KEY_VERSION}-${shop}-${contractId}-${ref.billingCycleIndex}`;
 }
 
+/**
+ * Dunning retry key (Phase 4 billing engine).
+ *
+ * Shopify treats a fresh subscriptionBillingAttemptCreate call for a cycle
+ * that already failed as a legitimate NEW chargeable attempt — it does NOT
+ * dedupe across attempt numbers, only within one. So a dunning retry must use
+ * a DIFFERENT idempotency key from the original attempt, or Shopify has no
+ * way to distinguish "retry this failed cycle" from "re-send of the same
+ * request." attemptNumber is explicit and starts at 2 (attempt 1 is always
+ * billingAttemptIdempotencyKey) so the sequence is visible in the key itself
+ * and a caller can never accidentally collide two different retries.
+ */
+export function billingRetryIdempotencyKey(
+  ref: BillingCycleRef,
+  attemptNumber: number,
+): string {
+  if (!Number.isInteger(attemptNumber) || attemptNumber < 2) {
+    throw new Error(
+      `billing retry idempotency key: invalid attempt number "${attemptNumber}" (must be an integer >= 2 — attempt 1 uses billingAttemptIdempotencyKey)`,
+    );
+  }
+  return `${billingAttemptIdempotencyKey(ref)}-retry${attemptNumber}`;
+}
+
 function numericIdFromGid(gid: string): string {
   const match = /^gid:\/\/shopify\/SubscriptionContract\/(\d+)$/.exec(gid);
   if (!match) {

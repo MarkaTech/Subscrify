@@ -36,6 +36,20 @@ api_version = "2026-07"
   topics = ["app/scopes_update"]
   uri = "/webhooks/app/scopes_update"
 
+  # Billing engine (Phase 4) — the async result of a subscriptionBillingAttemptCreate
+  # charge. Handled by: /app/routes/webhooks.subscription_billing_attempts.*.tsx
+  [[webhooks.subscriptions]]
+  topics = ["subscription_billing_attempts/success"]
+  uri = "/webhooks/subscription_billing_attempts/success"
+
+  [[webhooks.subscriptions]]
+  topics = ["subscription_billing_attempts/failure"]
+  uri = "/webhooks/subscription_billing_attempts/failure"
+
+  [[webhooks.subscriptions]]
+  topics = ["subscription_billing_attempts/challenged"]
+  uri = "/webhooks/subscription_billing_attempts/challenged"
+
   # Mandatory privacy compliance topics for public apps.
   # Handled by: /app/routes/webhooks.customers.data_request.tsx etc.
   [[webhooks.subscriptions]]

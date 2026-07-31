@@ -210,6 +210,10 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'shopify-api-secret'
           value: shopifyApiSecret
         }
+        {
+          name: 'servicebus-connection'
+          value: listKeys('${serviceBus.id}/AuthorizationRules/RootManageSharedAccessKey', serviceBus.apiVersion).primaryConnectionString
+        }
       ]
     }
     template: {
@@ -230,6 +234,11 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
             { name: 'NODE_ENV', value: 'production' }
             { name: 'PORT', value: '3000' }
+            { name: 'SERVICEBUS_CONNECTION', secretRef: 'servicebus-connection' }
+            // Scheduler ticks inside this always-on web process (the worker
+            // scales to zero — see run-scheduler.server.ts) and only makes
+            // sense once something is actually consuming the queue.
+            { name: 'ENABLE_BILLING_SCHEDULER', value: deployWorker ? 'true' : 'false' }
           ]
         }
       ]
@@ -243,7 +252,9 @@ resource webApp 'Microsoft.App/containerApps@2024-03-01' = {
   }
 }
 
-// Billing worker — created in Phase 4; scales on Service Bus queue depth (KEDA).
+// Billing worker (Phase 4) — same image as web, command overridden to run
+// the worker entrypoint instead of the web server. Scales on Service Bus
+// queue depth (KEDA), including down to zero when there's nothing to do.
 resource workerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployWorker) {
   name: '${prefix}-worker'
   location: location
@@ -253,6 +264,13 @@ resource workerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployWorker) 
   properties: {
     managedEnvironmentId: containerEnv.id
     configuration: {
+      // Same registry auth as web — this is the same image.
+      registries: empty(containerRegistryServer) ? [] : [
+        {
+          server: containerRegistryServer
+          identity: 'system'
+        }
+      ]
       secrets: [
         {
           name: 'database-url'
@@ -262,13 +280,22 @@ resource workerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployWorker) 
           name: 'servicebus-connection'
           value: listKeys('${serviceBus.id}/AuthorizationRules/RootManageSharedAccessKey', serviceBus.apiVersion).primaryConnectionString
         }
+        {
+          name: 'shopify-api-secret'
+          value: shopifyApiSecret
+        }
       ]
     }
     template: {
       containers: [
         {
           name: 'worker'
-          image: webImage // replaced with the worker image in Phase 4
+          image: webImage
+          // Runs `prisma generate` (no migrate deploy — the web container
+          // already owns applying migrations, running it from both would
+          // race) then the Service Bus consumer. Same image, different
+          // process — see app/worker/index.ts.
+          command: ['npm', 'run', 'docker-worker']
           resources: {
             cpu: json('0.5')
             memory: '1Gi'
@@ -276,6 +303,15 @@ resource workerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployWorker) 
           env: [
             { name: 'DATABASE_URL', secretRef: 'database-url' }
             { name: 'SERVICEBUS_CONNECTION', secretRef: 'servicebus-connection' }
+            // The worker builds its own shop-scoped admin clients via
+            // unauthenticated.admin(shop) (app/shopify.server.ts), which
+            // needs the same app identity/config as the web process.
+            { name: 'SHOPIFY_API_KEY', value: shopifyApiKey }
+            { name: 'SHOPIFY_API_SECRET', secretRef: 'shopify-api-secret' }
+            { name: 'SHOPIFY_APP_URL', value: appUrl }
+            { name: 'SCOPES', value: shopifyScopes }
+            { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: appInsights.properties.ConnectionString }
+            { name: 'NODE_ENV', value: 'production' }
           ]
         }
       ]
