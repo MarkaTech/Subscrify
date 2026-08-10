@@ -1,7 +1,9 @@
 api_version = "2026-07"
 
 [[extensions]]
-name = "Subscrify purchase options"
+# Display name only. `handle` is the extension's stable identifier with
+# Shopify — leave it as-is.
+name = "Marka Subscrify purchase options"
 handle = "subscrify-purchase-options"
 type = "ui_extension"
 
