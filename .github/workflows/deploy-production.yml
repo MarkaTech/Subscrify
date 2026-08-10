@@ -1,0 +1,113 @@
+name: Deploy production (Azure)
+
+# Manual trigger only, and gated behind a typed confirmation — this is the
+# environment real merchants and real money run through.
+#
+# PREREQUISITES (one-time, owner's Azure — NONE of these exist yet as of
+# 2026-08-10, so this workflow will fail until they're done):
+#   1. Resource group "subscrify-prod" in centralindia.
+#   2. A GitHub Environment named "production" holding:
+#        POSTGRES_ADMIN_PASSWORD  (any strong generated value; lands in Key Vault)
+#        SHOPIFY_API_SECRET       (same Shopify app secret staging uses)
+#      The AZURE_* values are reused from the repo/org level as with staging.
+#   3. The deploy service principal needs Contributor on subscrify-prod.
+#      NOTE: it does NOT need roleAssignments/write — this template no longer
+#      declares any role assignments (see infra/main.bicep). But it DOES mean
+#      the prod web + worker container apps' system identities will each need
+#      AcrPull granted manually, exactly like staging:
+#        az role assignment create --assignee <principalId> --role AcrPull \
+#          --scope $(az acr show --name caca4d77ed2eacr --query id -o tsv)
+#      Get each principalId after the first deploy with:
+#        az containerapp show -n subscrify-prod-web -g subscrify-prod \
+#          --query identity.principalId -o tsv
+#      Until that's done the image pull fails and the app never starts. This is
+#      the single most likely thing to go wrong on first prod deploy — it cost
+#      six failed staging runs to learn.
+#   4. infra/production.bicepparam's appUrl is empty on first deploy by
+#      necessity; fill it in and redeploy (see the comment in that file).
+#
+# Also note: shopify.app.toml still points application_url at STAGING. Merchants
+# and App Store reviewers hit whatever is in that file, so it must be repointed
+# at the prod FQDN (and deploy-shopify.yml re-run) before this environment is
+# actually serving anyone. There is only one Shopify app registration, so
+# staging and prod cannot both be the live URL at once.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy-production" to confirm'
+        required: true
+        type: string
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency: deploy-production
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "deploy-production" ]; then
+            echo "Confirmation string did not match. Refusing to deploy." >&2
+            exit 1
+          fi
+
+  deploy:
+    needs: guard
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Azure login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      # Lockfiles are intentionally untracked (see .gitignore); the container
+      # build needs one, so the pipeline generates it fresh here.
+      - name: Generate lockfile for container build
+        run: npm install --package-lock-only --no-audit --no-fund
+
+      # Build in ACR (never `az containerapp up` — it manages a container named
+      # after the app, which duplicates the Bicep-defined "web" container and
+      # crash-loops on a port conflict). Same registry as staging; the image tag
+      # is what distinguishes the two.
+      - name: Build image in ACR
+        run: |
+          az acr build --registry caca4d77ed2eacr \
+            --image subscrify-prod-web:${{ github.sha }} .
+
+      - name: Deploy infrastructure (Bicep)
+        env:
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
+        run: |
+          az deployment group create \
+            --resource-group subscrify-prod \
+            --template-file infra/main.bicep \
+            --parameters infra/production.bicepparam \
+            --parameters webImage=caca4d77ed2eacr.azurecr.io/subscrify-prod-web:${{ github.sha }}
+
+      # Surface what the operator needs for the two manual follow-ups above:
+      # the ingress FQDN (for appUrl + shopify.app.toml) and both principal IDs
+      # (for the AcrPull grants). Non-fatal — a failure here shouldn't fail a
+      # deploy that otherwise succeeded.
+      - name: Post-deploy values you still need
+        if: success()
+        run: |
+          echo "Ingress FQDN (put in production.bicepparam appUrl + shopify.app.toml application_url):"
+          az containerapp show -n subscrify-prod-web -g subscrify-prod \
+            --query properties.configuration.ingress.fqdn -o tsv || true
+          echo "Web identity principalId (needs AcrPull):"
+          az containerapp show -n subscrify-prod-web -g subscrify-prod \
+            --query identity.principalId -o tsv || true
+          echo "Worker identity principalId (needs AcrPull):"
+          az containerapp show -n subscrify-prod-worker -g subscrify-prod \
+            --query identity.principalId -o tsv || true
