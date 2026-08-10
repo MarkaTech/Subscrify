@@ -45,6 +45,16 @@ export function billingAttemptIdempotencyKey(ref: BillingCycleRef): string {
     );
   }
 
+  // DO NOT RENAME the "subscrify-" prefix — not for rebranding, not for
+  // tidiness. This exact string is sent to Shopify as the charge's
+  // idempotencyKey. Shopify dedupes on the key alone, so changing the prefix
+  // makes every already-charged cycle produce a key Shopify has never seen,
+  // and it will happily charge that cycle a SECOND time. That is invariant #1
+  // (never overbill) broken for every live contract at once. The app's
+  // display name changed to "Marka Subscrify" on 2026-08-10; this stayed put
+  // deliberately. If a versioned change is ever genuinely needed, bump
+  // KEY_VERSION instead — but understand that has the same double-charge
+  // effect and needs a migration plan, not just an edit.
   return `subscrify-${KEY_VERSION}-${shop}-${contractId}-${ref.billingCycleIndex}`;
 }
 
