@@ -1,10 +1,14 @@
-# Shopify app configuration for Subscrify.
-# App: Subscrify (Dev Dashboard app ID 403702841345, handle subscrify-1)
+# Shopify app configuration for Marka Subscrify.
+# App: Marka Subscrify (Dev Dashboard app ID 403702841345, handle subscrify-1)
 # Partner org: MARKA MODERN RETAIL PRIVATE LIMITED
 # Dev store: subscrify-test.myshopify.com
 
 client_id = "fc17a27061513df7a7c4dda09476d3cb"
-name = "Subscrify"
+# Display name only — safe to change. The `handle` below is NOT: it appears in
+# every embedded admin URL (/apps/subscrify-1/...), including the deep link
+# Shopify puts on subscription line items in the order admin. Renaming it
+# breaks those links for existing installs.
+name = "Marka Subscrify"
 handle = "subscrify-1"
 application_url = "https://subscrify-staging-web.victoriousriver-73bb1ad1.centralindia.azurecontainerapps.io"
 embedded = true
