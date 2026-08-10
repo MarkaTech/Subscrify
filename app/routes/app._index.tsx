@@ -1,254 +1,148 @@
-import { useEffect } from "react";
-import type {
-  ActionFunctionArgs,
-  HeadersFunction,
-  LoaderFunctionArgs,
-} from "react-router";
-import { useFetcher } from "react-router";
-import { useAppBridge } from "@shopify/app-bridge-react";
-import { authenticate } from "../shopify.server";
+import type { HeadersFunction, LoaderFunctionArgs } from "react-router";
+import { useLoaderData, useNavigate } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 
+import { authenticate } from "../shopify.server";
+import { listPrograms } from "../lib/selling-plans/api.server";
+import { listContracts } from "../lib/contracts/api.server";
+
+/**
+ * Home / overview.
+ *
+ * Loads the two counts the setup checklist keys off. Both calls are wrapped
+ * individually: this is the first page a merchant sees after install, and a
+ * transient Admin API hiccup on one resource should degrade that section to a
+ * neutral state rather than blanking the whole page behind an error boundary.
+ * (Contracts in particular can hard-fail with ACCESS_DENIED until Protected
+ * Customer Data is approved for the app — a real, expected state for a fresh
+ * install, not a bug worth a 500.)
+ */
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  await authenticate.admin(request);
-
-  return null;
-};
-
-export const action = async ({ request }: ActionFunctionArgs) => {
   const { admin } = await authenticate.admin(request);
-  const color = ["Red", "Orange", "Yellow", "Green"][
-    Math.floor(Math.random() * 4)
-  ];
-  const response = await admin.graphql(
-    `#graphql
-      mutation populateProduct($product: ProductCreateInput!) {
-        productCreate(product: $product) {
-          product {
-            id
-            title
-            handle
-            status
-            variants(first: 10) {
-              edges {
-                node {
-                  id
-                  price
-                  barcode
-                  createdAt
-                }
-              }
-            }
-          }
-        }
-      }`,
-    {
-      variables: {
-        product: {
-          title: `${color} Snowboard`,
-        },
-      },
-    },
-  );
-  const responseJson = await response.json();
 
-  const product = responseJson.data!.productCreate!.product!;
-  const variantId = product.variants.edges[0]!.node!.id!;
+  let programCount: number | null = null;
+  let productsAttached = false;
+  try {
+    const programs = await listPrograms(admin);
+    programCount = programs.length;
+    productsAttached = programs.some((p) => (p.productCount ?? 0) > 0);
+  } catch {
+    programCount = null;
+  }
 
-  const variantResponse = await admin.graphql(
-    `#graphql
-    mutation shopifyReactRouterTemplateUpdateVariant($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-      productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-        productVariants {
-          id
-          price
-          barcode
-          createdAt
-        }
-      }
-    }`,
-    {
-      variables: {
-        productId: product.id,
-        variants: [{ id: variantId, price: "100.00" }],
-      },
-    },
-  );
+  let contractCount: number | null = null;
+  try {
+    const contracts = await listContracts(admin);
+    contractCount = contracts.length;
+  } catch {
+    contractCount = null;
+  }
 
-  const variantResponseJson = await variantResponse.json();
-
-  return {
-    product: responseJson!.data!.productCreate!.product,
-    variant:
-      variantResponseJson!.data!.productVariantsBulkUpdate!.productVariants,
-  };
+  return { programCount, productsAttached, contractCount };
 };
 
 export default function Index() {
-  const fetcher = useFetcher<typeof action>();
+  const { programCount, productsAttached, contractCount } =
+    useLoaderData<typeof loader>();
+  const navigate = useNavigate();
 
-  const shopify = useAppBridge();
-  const isLoading =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
+  const hasProgram = (programCount ?? 0) > 0;
+  const hasContract = (contractCount ?? 0) > 0;
 
-  useEffect(() => {
-    if (fetcher.data?.product?.id) {
-      shopify.toast.show("Product created");
-    }
-  }, [fetcher.data?.product?.id, shopify]);
-
-  const generateProduct = () => fetcher.submit({}, { method: "POST" });
+  // Ordered setup steps. `done: null` means "couldn't determine" — shown as a
+  // neutral step rather than a false negative that would nag a merchant who is
+  // actually already set up.
+  const steps: Array<{ done: boolean | null; title: string; body: string }> = [
+    {
+      done: programCount === null ? null : hasProgram,
+      title: "Create a subscription program",
+      body: hasProgram
+        ? `${programCount} program${programCount === 1 ? "" : "s"} created.`
+        : "Set the delivery frequency and any subscriber discount. This is what buyers pick at checkout.",
+    },
+    {
+      done: programCount === null ? null : productsAttached,
+      title: "Attach products to it",
+      body: productsAttached
+        ? "Products are attached — subscription options show on those product pages."
+        : "Until at least one product is attached, no buyer can start a subscription.",
+    },
+    {
+      done: contractCount === null ? null : hasContract,
+      title: "Receive your first subscription",
+      body: hasContract
+        ? `${contractCount} active subscription${contractCount === 1 ? "" : "s"}. Billing renewals run automatically.`
+        : "Once a buyer subscribes, their contract appears under Subscriptions and renews on schedule.",
+    },
+  ];
 
   return (
-    <s-page heading="Shopify app template">
-      <s-button slot="primary-action" onClick={generateProduct}>
-        Generate a product
+    <s-page heading="Marka Subscrify">
+      {/* Never nest s-button inside s-link: the shadow-DOM button swallows the
+          anchor's click and the link goes dead. Use a bare s-button that
+          navigates programmatically instead. */}
+      <s-button
+        slot="primary-action"
+        onClick={() => navigate("/app/programs/new")}
+      >
+        Create program
       </s-button>
 
-      <s-section heading="Congrats on creating a new Shopify app 🎉">
-        <s-paragraph>
-          This embedded app template uses{" "}
-          <s-link
-            href="https://shopify.dev/docs/apps/tools/app-bridge"
-            target="_blank"
-          >
-            App Bridge
-          </s-link>{" "}
-          interface examples like an{" "}
-          <s-link href="/app/additional">additional page in the app nav</s-link>
-          , as well as an{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            Admin GraphQL
-          </s-link>{" "}
-          mutation demo, to provide a starting point for app development.
-        </s-paragraph>
-      </s-section>
-      <s-section heading="Get started with products">
-        <s-paragraph>
-          Generate a product with GraphQL and get the JSON output for that
-          product. Learn more about the{" "}
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql/latest/mutations/productCreate"
-            target="_blank"
-          >
-            productCreate
-          </s-link>{" "}
-          mutation in our API references.
-        </s-paragraph>
-        <s-stack direction="inline" gap="base">
-          <s-button
-            onClick={generateProduct}
-            {...(isLoading ? { loading: true } : {})}
-          >
-            Generate a product
-          </s-button>
-          {fetcher.data?.product && (
-            <s-button
-              onClick={() => {
-                shopify.intents.invoke?.("edit:shopify/Product", {
-                  value: fetcher.data?.product?.id,
-                });
-              }}
-              target="_blank"
-              variant="tertiary"
+      <s-section heading="Setup">
+        {steps.map((step) => (
+          <s-stack key={step.title} direction="inline" gap="base">
+            <s-badge
+              tone={
+                step.done === null ? "info" : step.done ? "success" : "neutral"
+              }
             >
-              Edit product
-            </s-button>
-          )}
-        </s-stack>
-        {fetcher.data?.product && (
-          <s-section heading="productCreate mutation">
-            <s-stack direction="block" gap="base">
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.product, null, 2)}</code>
-                </pre>
-              </s-box>
-
-              <s-heading>productVariantsBulkUpdate mutation</s-heading>
-              <s-box
-                padding="base"
-                borderWidth="base"
-                borderRadius="base"
-                background="subdued"
-              >
-                <pre style={{ margin: 0 }}>
-                  <code>{JSON.stringify(fetcher.data.variant, null, 2)}</code>
-                </pre>
-              </s-box>
+              {step.done === null ? "—" : step.done ? "Done" : "To do"}
+            </s-badge>
+            <s-stack direction="block" gap="none">
+              <s-text type="strong">{step.title}</s-text>
+              <s-paragraph>{step.body}</s-paragraph>
             </s-stack>
-          </s-section>
-        )}
+          </s-stack>
+        ))}
       </s-section>
 
-      <s-section slot="aside" heading="App template specs">
+      <s-section heading="Programs">
         <s-paragraph>
-          <s-text>Framework: </s-text>
-          <s-link href="https://reactrouter.com/" target="_blank">
-            React Router
-          </s-link>
+          {programCount === null
+            ? "Couldn't load programs just now — open the Programs page to check."
+            : hasProgram
+              ? `You have ${programCount} subscription program${programCount === 1 ? "" : "s"}. Edit a program to change its frequency, discount, or which products offer it.`
+              : "A program defines how often an order repeats and what subscribers pay. Create one to start offering subscriptions."}
         </s-paragraph>
-        <s-paragraph>
-          <s-text>Interface: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/app-home/using-polaris-components"
-            target="_blank"
-          >
-            Polaris web components
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>API: </s-text>
-          <s-link
-            href="https://shopify.dev/docs/api/admin-graphql"
-            target="_blank"
-          >
-            GraphQL
-          </s-link>
-        </s-paragraph>
-        <s-paragraph>
-          <s-text>Database: </s-text>
-          <s-link href="https://www.prisma.io/" target="_blank">
-            Prisma
-          </s-link>
-        </s-paragraph>
+        <s-button onClick={() => navigate("/app/programs")}>
+          View programs
+        </s-button>
       </s-section>
 
-      <s-section slot="aside" heading="Next steps">
-        <s-unordered-list>
-          <s-list-item>
-            Build an{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/getting-started/build-app-example"
-              target="_blank"
-            >
-              example app
-            </s-link>
-          </s-list-item>
-          <s-list-item>
-            Explore Shopify&apos;s API with{" "}
-            <s-link
-              href="https://shopify.dev/docs/apps/tools/graphiql-admin-api"
-              target="_blank"
-            >
-              GraphiQL
-            </s-link>
-          </s-list-item>
-        </s-unordered-list>
+      <s-section heading="Subscriptions">
+        <s-paragraph>
+          {contractCount === null
+            ? "Couldn't load subscriptions just now — open the Subscriptions page to check."
+            : hasContract
+              ? `${contractCount} subscription contract${contractCount === 1 ? "" : "s"}. Each one renews automatically on its billing date; open a contract to see its billing history.`
+              : "No subscriptions yet. They'll appear here as buyers subscribe at checkout."}
+        </s-paragraph>
+        <s-button onClick={() => navigate("/app/contracts")}>
+          View subscriptions
+        </s-button>
+      </s-section>
+
+      <s-section slot="aside" heading="How billing works">
+        <s-paragraph>
+          Marka Subscrify charges each contract automatically on its billing date. If a
+          payment fails, it retries after 3, then 5, then 7 days before marking
+          the attempt as failed — and it will never charge the same billing cycle
+          twice.
+        </s-paragraph>
       </s-section>
     </s-page>
   );
 }
 
-export const headers: HeadersFunction = (headersArgs) => {
-  return boundary.headers(headersArgs);
-};
+export const headers: HeadersFunction = (headersArgs) =>
+  boundary.headers(headersArgs);
