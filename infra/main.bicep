@@ -343,30 +343,31 @@ resource workerApp 'Microsoft.App/containerApps@2024-03-01' = if (deployWorker) 
 
 // The web app's system identity was granted AcrPull manually, out-of-band,
 // before this template existed (see containerRegistryServer's @description).
-// The worker app is a genuinely new resource with its own fresh identity —
-// nothing grants that one AcrPull unless this template does it, so its first
-// deploy would otherwise sit stuck on an unauthorized image pull forever.
-// Declaring it here means every future new-identity Container App in this
-// template gets pull access automatically, not via another manual step.
-resource acr 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = if (deployWorker && !empty(containerRegistryServer)) {
-  name: split(containerRegistryServer, '.')[0]
-}
-
-var acrPullRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')
-
-resource workerAcrPull 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (deployWorker && !empty(containerRegistryServer)) {
-  // Guarded by the same `deployWorker` condition as workerApp itself, so
-  // whenever this resource actually deploys, workerApp is guaranteed to
-  // exist too — the null-forgiving `!` just tells Bicep's static analysis
-  // what's already true at runtime.
-  name: guid(acr.id, workerApp!.id, 'AcrPull')
-  scope: acr
-  properties: {
-    principalId: workerApp!.identity.principalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: acrPullRoleId
-  }
-}
+//
+// The worker app's identity was ALSO granted AcrPull manually, out-of-band
+// (2026-07-31) — see claude/subscrify-status.md for the full story. Short
+// version: this template used to declare that grant as a
+// Microsoft.Authorization/roleAssignments resource (commit 223d1ce), on the
+// theory that every future new-identity Container App would then get pull
+// access automatically instead of needing another manual step. That's still
+// true in principle, but in practice the GitHub Actions deploy identity only
+// has Contributor on this resource group, and creating a roleAssignments
+// resource requires roleAssignments/write — which Contributor explicitly
+// excludes by Azure design. So EVERY deploy attempt failed at this step with
+// AuthorizationFailed, even after the assignment already existed, because
+// ARM re-evaluates (re-PUTs) every resource in the template on every
+// deployment regardless of whether it's a no-op. Confirmed via three
+// identical failures (runs #20-24) before diagnosing this.
+//
+// Fix: dropped the Bicep-managed role assignment and rely on the manual
+// grant instead — same tradeoff the web app already lived with for its
+// whole lifetime. The cost: any FUTURE Container App this template adds
+// will need its identity granted AcrPull manually too (same one-liner used
+// this time: `az role assignment create --assignee <principalId> --role
+// AcrPull --scope <acr-resource-id>`), rather than picking it up for free.
+// That's a fine tradeoff for a project this size; if it becomes a recurring
+// pain, the real fix is granting the deploy identity `User Access
+// Administrator` scoped to just the ACR, which was never actually done.
 
 // ---------------------------------------------------------------- alerts
 resource dlqAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
