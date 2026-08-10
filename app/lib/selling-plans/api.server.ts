@@ -11,7 +11,17 @@ import {
   type ProgramConfig,
 } from "./program";
 
-/** App-defined marker so Subscrify lists only its own groups. */
+/**
+ * App-defined marker so Marka Subscrify lists only its own selling plan groups.
+ *
+ * DO NOT RENAME this value. It is stamped as `appId` on every group the app
+ * creates in the merchant's store, and the list/get calls below filter on an
+ * exact match. Change it and every program a merchant already created stops
+ * being visible in the app — the groups are still live on their products and
+ * still selling, they just vanish from this UI, and the merchant can silently
+ * create a duplicate on top. The display name changed to "Marka Subscrify" on
+ * 2026-08-10; this identifier stayed put deliberately.
+ */
 export const SUBSCRIFY_APP_ID = "subscrify";
 
 // Minimal admin-client shape (from authenticate.admin) we depend on.
