@@ -113,6 +113,39 @@ export async function fetchDueCycle(
   return pickDueCycle(cycles, now);
 }
 
+const CONTRACT_STATUS_QUERY = `#graphql
+  query SubscrifyContractStatus($id: ID!) {
+    subscriptionContract(id: $id) {
+      id
+      status
+    }
+  }
+`;
+
+/**
+ * One contract's current status, straight from Shopify.
+ *
+ * Used by the manual "bill now" guard (forceBillContractNow). Read live
+ * rather than trusting whatever the page was rendered with: a merchant can
+ * leave the contract detail tab open, pause the subscription from elsewhere
+ * (or a customer can, via the customer portal), and then click "bill now" on
+ * a stale page. The status that matters is the one at the moment of the
+ * charge decision.
+ *
+ * Returns null if the contract is missing or the field can't be read, which
+ * callers must treat as "not billable" rather than "probably fine".
+ */
+export async function fetchContractStatus(
+  admin: AdminClient,
+  contractGid: string,
+): Promise<string | null> {
+  const response = await admin.graphql(CONTRACT_STATUS_QUERY, {
+    variables: { id: contractGid },
+  });
+  const json = await response.json();
+  return json?.data?.subscriptionContract?.status ?? null;
+}
+
 /**
  * The earliest UNBILLED, unskipped cycle for a contract, regardless of
  * whether its billingAttemptExpectedDate has arrived yet. Used only by the

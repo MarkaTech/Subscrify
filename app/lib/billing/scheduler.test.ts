@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isContractDue, pickDueCycle } from "./scheduler.server";
+import { isBillableStatus, isContractDue, pickDueCycle } from "./scheduler.server";
 
 const now = new Date("2026-08-31T12:00:00.000Z");
 
@@ -85,5 +85,37 @@ describe("pickDueCycle", () => {
       { cycleIndex: 2, billingAttemptExpectedDate: "2026-09-30T00:00:00.000Z", status: "UNBILLED" as const, skipped: false },
     ];
     expect(pickDueCycle(cycles, now)?.cycleIndex).toBe(1);
+  });
+});
+
+describe("isBillableStatus (Phase 5 — pause/cancel guard)", () => {
+  it("only ACTIVE is billable", () => {
+    expect(isBillableStatus("ACTIVE")).toBe(true);
+  });
+
+  it("refuses to bill a paused contract", () => {
+    // The whole point of pause: a merchant or customer asked billing to stop.
+    expect(isBillableStatus("PAUSED")).toBe(false);
+  });
+
+  it("refuses to bill a cancelled contract", () => {
+    expect(isBillableStatus("CANCELLED")).toBe(false);
+  });
+
+  it("fails closed on unknown, missing, or future statuses", () => {
+    // Never charge money on a status we don't recognise.
+    expect(isBillableStatus("EXPIRED")).toBe(false);
+    expect(isBillableStatus("SOMETHING_SHOPIFY_ADDS_LATER")).toBe(false);
+    expect(isBillableStatus(null)).toBe(false);
+    expect(isBillableStatus(undefined)).toBe(false);
+    expect(isBillableStatus("")).toBe(false);
+  });
+
+  it("keeps isContractDue consistent with it", () => {
+    const past = new Date("2026-01-01T00:00:00Z").toISOString();
+    const now = new Date("2026-06-01T00:00:00Z");
+    expect(isContractDue({ status: "ACTIVE", nextBillingDate: past }, now)).toBe(true);
+    expect(isContractDue({ status: "PAUSED", nextBillingDate: past }, now)).toBe(false);
+    expect(isContractDue({ status: "CANCELLED", nextBillingDate: past }, now)).toBe(false);
   });
 });

@@ -19,9 +19,24 @@ export interface ContractDueCheck {
   nextBillingDate: string | null;
 }
 
+/**
+ * Is this contract in a state where charging it is legitimate at all?
+ *
+ * Separate from isContractDue on purpose. "Due" is about timing; this is
+ * about permission. The manual "bill now" support action deliberately
+ * ignores timing, so it needs the permission half on its own — see
+ * forceBillContractNow. Only ACTIVE qualifies: PAUSED means the merchant or
+ * customer asked for billing to stop, CANCELLED is terminal, and anything
+ * else (EXPIRED, FAILED, a status Shopify adds later) is not something to
+ * guess at by charging money.
+ */
+export function isBillableStatus(status: string | null | undefined): boolean {
+  return status === "ACTIVE";
+}
+
 /** Only ACTIVE contracts with a nextBillingDate that has already arrived are due. */
 export function isContractDue(contract: ContractDueCheck, now: Date): boolean {
-  if (contract.status !== "ACTIVE") return false;
+  if (!isBillableStatus(contract.status)) return false;
   if (!contract.nextBillingDate) return false;
   return new Date(contract.nextBillingDate).getTime() <= now.getTime();
 }

@@ -20,10 +20,12 @@ import { unauthenticated } from "../../shopify.server";
 import type { AdminClient } from "../selling-plans/api.server";
 import { billingAttemptIdempotencyKey } from "./idempotency.server";
 import {
+  fetchContractStatus,
   fetchDueContracts,
   fetchDueCycle,
   fetchEarliestUnbilledCycle,
 } from "./queries.server";
+import { isBillableStatus } from "./scheduler.server";
 import { enqueueAttempt, listInstalledShops } from "./store.server";
 import { sendBillingAttemptMessage } from "./queue.server";
 
@@ -106,12 +108,18 @@ async function tickForShop(
   }
 }
 
-export type ForceBillOutcome = "enqueued" | "already_in_flight" | "nothing_to_bill";
+export type ForceBillOutcome =
+  | "enqueued"
+  | "already_in_flight"
+  | "nothing_to_bill"
+  | "not_billable";
 
 export interface ForceBillResult {
   outcome: ForceBillOutcome;
   cycleIndex?: number;
   idempotencyKey?: string;
+  /** Set on "not_billable": the contract status that blocked the charge. */
+  status?: string;
 }
 
 /**
@@ -123,6 +131,16 @@ export interface ForceBillResult {
  * the cycle isn't due yet, Shopify itself rejects the attempt (see
  * fetchEarliestUnbilledCycle's doc comment) rather than this function
  * silently overriding anything.
+ *
+ * STATUS GUARD (added with Phase 5 pause/cancel): this path deliberately
+ * bypasses "is it due yet", so it must NOT also bypass "should this contract
+ * be charged at all". The scheduled path never sees a paused or cancelled
+ * contract — DUE_CONTRACTS_QUERY filters on status:ACTIVE and
+ * isContractDue re-checks it — but this function reaches a contract by id,
+ * so without an explicit check a merchant could pause a subscription at a
+ * customer's request and then charge it anyway with one click. Shopify may
+ * well accept that attempt for a PAUSED contract; "the API would probably
+ * stop us" is not the standard the rest of this engine is held to.
  */
 export async function forceBillContractNow(
   db: PrismaClient,
@@ -131,6 +149,11 @@ export async function forceBillContractNow(
   subscriptionContractGid: string,
   now: Date = new Date(),
 ): Promise<ForceBillResult> {
+  const status = await fetchContractStatus(admin, subscriptionContractGid);
+  if (!isBillableStatus(status)) {
+    return { outcome: "not_billable", status: status ?? "UNKNOWN" };
+  }
+
   const cycle = await fetchEarliestUnbilledCycle(admin, subscriptionContractGid, now);
   if (!cycle) return { outcome: "nothing_to_bill" };
 
