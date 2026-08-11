@@ -1,8 +1,16 @@
+import { useState } from "react";
 import type { ActionFunctionArgs, HeadersFunction, LoaderFunctionArgs } from "react-router";
 import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { getContract } from "../lib/contracts/api.server";
+import {
+  actionPastTense,
+  allowedActions,
+  isActionAllowed,
+  type LifecycleAction,
+} from "../lib/contracts/lifecycle";
+import { runLifecycleAction } from "../lib/contracts/lifecycle.server";
 import { forceBillContractNow } from "../lib/billing/run-scheduler.server";
 import { listAttemptsForContract } from "../lib/billing/store.server";
 import db from "../db.server";
@@ -26,10 +34,19 @@ export const loader = async ({ params, request }: LoaderFunctionArgs) => {
   return { contract, billingAttempts };
 };
 
+const LIFECYCLE_INTENTS = new Set<LifecycleAction>(["pause", "resume", "cancel"]);
+
 /**
- * "Bill this cycle now" — a merchant-support action (Phase 4 billing
- * engine). Goes through the real scheduler → Service Bus → worker path
- * (see forceBillContractNow's doc comment), not a special-cased shortcut.
+ * Two kinds of action share this route:
+ *   - "bill"                     — the Phase 4 merchant-support charge trigger
+ *   - pause / resume / cancel    — Phase 5 lifecycle
+ *
+ * Lifecycle actions re-read the contract's current status server-side and
+ * re-check it against allowedActions before mutating. The buttons are already
+ * conditioned on status, but a page can sit open while the contract changes
+ * elsewhere — another staff member, or the customer via the customer portal —
+ * and a stale button must not be able to drive a cancel the merchant no
+ * longer means.
  */
 export const action = async ({ params, request }: ActionFunctionArgs) => {
   const { session, admin } = await authenticate.admin(request);
@@ -37,6 +54,31 @@ export const action = async ({ params, request }: ActionFunctionArgs) => {
   if (!gid) {
     throw new Response("Subscription not found", { status: 404 });
   }
+
+  const form = await request.formData();
+  const intent = String(form.get("intent") ?? "bill");
+
+  if (LIFECYCLE_INTENTS.has(intent as LifecycleAction)) {
+    const wanted = intent as LifecycleAction;
+    const current = await getContract(admin, gid);
+    if (!current) {
+      throw new Response("Subscription not found", { status: 404 });
+    }
+    if (!isActionAllowed(current.status, wanted)) {
+      return {
+        lifecycle: {
+          ok: false,
+          error: `This subscription is ${current.status}, so it can no longer be ${actionPastTense(
+            wanted,
+          )}. Refresh to see its current state.`,
+        },
+        action: wanted,
+      };
+    }
+    const lifecycle = await runLifecycleAction(admin, gid, wanted);
+    return { lifecycle, action: wanted };
+  }
+
   const result = await forceBillContractNow(db, admin, session.shop, gid);
   return { result };
 };
@@ -85,6 +127,14 @@ export default function ContractDetail() {
   const { contract, billingAttempts } = useLoaderData<typeof loader>();
   const fetcher = useFetcher<typeof action>();
   const result = fetcher.data?.result;
+  const lifecycle = fetcher.data?.lifecycle;
+  const lifecycleAction = fetcher.data?.action;
+  const [confirmingCancel, setConfirmingCancel] = useState(false);
+
+  const busy = fetcher.state !== "idle";
+  const actions = allowedActions(contract.status);
+  const submit = (intent: LifecycleAction) =>
+    fetcher.submit({ intent }, { method: "post" });
 
   return (
     <s-page heading={`Subscription #${contract.numericId}`}>
@@ -101,6 +151,85 @@ export default function ContractDetail() {
         ) : null}
         {contract.originOrderName ? (
           <s-paragraph>Origin order: {contract.originOrderName}</s-paragraph>
+        ) : null}
+
+        {lifecycle ? (
+          <s-banner tone={lifecycle.ok ? "success" : "critical"}>
+            <s-paragraph>
+              {lifecycle.ok
+                ? lifecycleAction === "pause"
+                  ? "Subscription paused. No further renewals will be charged until it's resumed."
+                  : lifecycleAction === "resume"
+                    ? "Subscription resumed. Renewals will charge on schedule again."
+                    : "Subscription cancelled. It will not be charged again."
+                : lifecycle.error}
+            </s-paragraph>
+          </s-banner>
+        ) : null}
+
+        {/* Never nest s-button inside s-link — the shadow-DOM button swallows
+            the click and the control goes dead (see a91bdb4). */}
+        {actions.includes("pause") ? (
+          <s-button
+            variant="secondary"
+            {...(busy ? { loading: true } : {})}
+            onClick={() => submit("pause")}
+          >
+            Pause subscription
+          </s-button>
+        ) : null}
+
+        {actions.includes("resume") ? (
+          <s-button
+            variant="secondary"
+            {...(busy ? { loading: true } : {})}
+            onClick={() => submit("resume")}
+          >
+            Resume subscription
+          </s-button>
+        ) : null}
+
+        {/* Cancelling is irreversible in Shopify — a cancelled contract cannot
+            be reactivated — so it takes a second, explicit confirmation rather
+            than firing on one click. */}
+        {actions.includes("cancel") ? (
+          confirmingCancel ? (
+            <>
+              <s-paragraph>
+                Cancel this subscription permanently? It can&rsquo;t be resumed
+                afterwards — the customer would have to subscribe again.
+              </s-paragraph>
+              <s-button
+                variant="primary"
+                tone="critical"
+                {...(busy ? { loading: true } : {})}
+                onClick={() => {
+                  setConfirmingCancel(false);
+                  submit("cancel");
+                }}
+              >
+                Yes, cancel permanently
+              </s-button>
+              <s-button variant="tertiary" onClick={() => setConfirmingCancel(false)}>
+                Keep subscription
+              </s-button>
+            </>
+          ) : (
+            <s-button
+              variant="secondary"
+              tone="critical"
+              onClick={() => setConfirmingCancel(true)}
+            >
+              Cancel subscription
+            </s-button>
+          )
+        ) : null}
+
+        {actions.length === 0 ? (
+          <s-paragraph>
+            No further changes are possible for a {contract.status.toLowerCase()}{" "}
+            subscription.
+          </s-paragraph>
         ) : null}
       </s-section>
 
@@ -141,19 +270,32 @@ export default function ContractDetail() {
       </s-section>
 
       <s-section heading="Billing">
-        <s-button
-          variant="secondary"
-          {...(fetcher.state !== "idle" ? { loading: true } : {})}
-          onClick={() => fetcher.submit(null, { method: "post" })}
-        >
-          Bill next unbilled cycle now
-        </s-button>
+        {/* Only offered while the contract is actually billable. The server
+            enforces this too (forceBillContractNow's status guard) — hiding
+            the button is the courtesy, not the control. */}
+        {contract.status === "ACTIVE" ? (
+          <s-button
+            variant="secondary"
+            {...(busy ? { loading: true } : {})}
+            onClick={() => fetcher.submit({ intent: "bill" }, { method: "post" })}
+          >
+            Bill next unbilled cycle now
+          </s-button>
+        ) : (
+          <s-paragraph>
+            {contract.status === "PAUSED"
+              ? "Paused subscriptions aren't charged. Resume it to bill again."
+              : `A ${contract.status.toLowerCase()} subscription can't be charged.`}
+          </s-paragraph>
+        )}
         {result ? (
           <s-paragraph>
             {result.outcome === "enqueued" && `Enqueued cycle ${result.cycleIndex} for charging.`}
             {result.outcome === "already_in_flight" &&
               `Cycle ${result.cycleIndex} is already enqueued or in progress.`}
             {result.outcome === "nothing_to_bill" && "Nothing unbilled to charge right now."}
+            {result.outcome === "not_billable" &&
+              `This subscription is ${result.status} and was not charged.`}
           </s-paragraph>
         ) : null}
 
