@@ -4,7 +4,10 @@ import { defineConfig } from "vitest/config";
 // Remix/Shopify Vite plugins (they expect a full app dev environment).
 export default defineConfig({
   test: {
-    include: ["app/**/*.test.ts", "workers/**/*.test.ts"],
+    // .tsx too: the legal-page Markdown renderer returns React elements, and
+    // its test asserts on that element tree. Still pure Node — nothing here
+    // touches a DOM.
+    include: ["app/**/*.test.ts", "app/**/*.test.tsx", "workers/**/*.test.ts"],
     environment: "node",
   },
 });
