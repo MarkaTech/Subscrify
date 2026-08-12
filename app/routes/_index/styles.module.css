@@ -158,3 +158,15 @@
     width: 100%;
   }
 }
+
+/* Privacy / Terms links in the footnote. Plain anchors, not buttons — an
+   s-button or a styled control here would be a dead click waiting to happen,
+   and these need to work before a merchant has installed anything. */
+.footlink {
+  color: #767674;
+  text-decoration: underline;
+}
+
+.footlink:hover {
+  color: #1a1a1a;
+}

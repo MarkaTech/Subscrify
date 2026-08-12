@@ -93,7 +93,14 @@ export default function App() {
         </ul>
 
         <p className={styles.footnote}>
-          Built by MARKA MODERN RETAIL PRIVATE LIMITED.
+          Built by MARKA MODERN RETAIL PRIVATE LIMITED.{" "}
+          <a className={styles.footlink} href="/privacy">
+            Privacy
+          </a>{" "}
+          &middot;{" "}
+          <a className={styles.footlink} href="/terms">
+            Terms &amp; DPA
+          </a>
         </p>
       </div>
     </div>
