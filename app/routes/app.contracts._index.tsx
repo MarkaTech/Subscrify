@@ -3,11 +3,27 @@ import { Link, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { listContracts } from "../lib/contracts/api.server";
+import {
+  actorFromSessionToken,
+  logPersonalDataAccess,
+} from "../lib/audit/access-log.server";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, session, sessionToken } = await authenticate.admin(request);
   try {
     const contracts = await listContracts(admin);
+    // This list renders each subscriber's name, so loading it is an access to
+    // protected customer data and is audited. Only logged when rows actually
+    // came back — an empty list exposed nothing.
+    if (contracts.length > 0) {
+      logPersonalDataAccess({
+        shop: session.shop,
+        actorUserId: actorFromSessionToken(sessionToken),
+        resource: "contract_list",
+        recordCount: contracts.length,
+        fields: ["name"],
+      });
+    }
     return { contracts, error: null as string | null };
   } catch (e: any) {
     // Surface the failure in the UI instead of a blank 500 — this page is

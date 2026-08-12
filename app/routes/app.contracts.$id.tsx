@@ -11,6 +11,11 @@ import {
   type LifecycleAction,
 } from "../lib/contracts/lifecycle";
 import { runLifecycleAction } from "../lib/contracts/lifecycle.server";
+import {
+  actorFromSessionToken,
+  logPersonalDataAccess,
+  type ProtectedField,
+} from "../lib/audit/access-log.server";
 import { forceBillContractNow } from "../lib/billing/run-scheduler.server";
 import { listAttemptsForContract } from "../lib/billing/store.server";
 import db from "../db.server";
@@ -24,12 +29,28 @@ function contractGidFromParam(id: string | undefined): string | null {
 }
 
 export const loader = async ({ params, request }: LoaderFunctionArgs) => {
-  const { session, admin } = await authenticate.admin(request);
+  const { session, admin, sessionToken } = await authenticate.admin(request);
   const gid = contractGidFromParam(params.id);
   const contract = gid ? await getContract(admin, gid) : null;
   if (!contract || !gid) {
     throw new Response("Subscription not found", { status: 404 });
   }
+
+  // This page displays the subscriber's name and (when granted) email, so
+  // loading it is an access to protected customer data. Record which fields
+  // were actually shown — email is absent unless Protected Customer Data
+  // approval covers it — never their values.
+  const fields: ProtectedField[] = ["name"];
+  if (contract.customerEmail) fields.push("email");
+  logPersonalDataAccess({
+    shop: session.shop,
+    actorUserId: actorFromSessionToken(sessionToken),
+    resource: "contract_detail",
+    contractGid: gid,
+    recordCount: 1,
+    fields,
+  });
+
   const billingAttempts = await listAttemptsForContract(db, session.shop, gid);
   return { contract, billingAttempts };
 };
