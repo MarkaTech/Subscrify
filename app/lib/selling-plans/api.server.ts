@@ -92,6 +92,17 @@ const GROUP_FIELDS = `#graphql
 `;
 
 function throwOnUserErrors(payload: any, mutation: string) {
+  // Top-level GraphQL errors (throttling, permission denials, a malformed
+  // query) come back as payload.errors with payload.data null — nothing
+  // under payload.data[mutation] to read userErrors from. Before this check,
+  // that shape made throwOnUserErrors a silent no-op: updateProgram,
+  // deleteProgram, and setProgramProducts would return normally, the caller
+  // would redirect as if the change was saved, and the merchant's store
+  // would silently keep its old state.
+  if (payload?.errors?.length) {
+    const messages = payload.errors.map((e: any) => e?.message ?? "Unknown error");
+    throw new SellingPlanApiError(messages.join("; "), []);
+  }
   const errors = payload?.data?.[mutation]?.userErrors;
   if (errors?.length) {
     throw new SellingPlanApiError(
@@ -214,6 +225,42 @@ export async function createProgram(
   return json.data.sellingPlanGroupCreate.sellingPlanGroup.id;
 }
 
+/**
+ * Confirms `groupId` is both a real selling plan group in this shop and one
+ * Subscrify itself created, before any mutating call touches it.
+ *
+ * The admin client is already shop-scoped (invariant #2), so this can never
+ * reach into another merchant's store — but within one shop, updateProgram/
+ * deleteProgram/setProgramProducts previously trusted whatever groupId the
+ * caller passed with no re-check. The list/edit UI only ever surfaces
+ * Subscrify-owned groups (listPrograms filters on appId, and the loader in
+ * app.programs.$id.tsx 404s via getProgram), but the action functions that
+ * actually mutate didn't repeat that check — a group id for a plan the
+ * merchant created some other way (Shopify's native subscriptions UI,
+ * another app, or by hand) would be silently editable or deletable by
+ * Subscrify if that id ever reached these functions, e.g. via a replayed or
+ * hand-edited form submission. This is the same guard the read path already
+ * has, applied to the write path too.
+ */
+async function assertOwnedByApp(admin: AdminClient, groupId: string): Promise<void> {
+  const response = await admin.graphql(
+    `#graphql
+    query subscrifyCheckGroupOwner($id: ID!) {
+      sellingPlanGroup(id: $id) { id appId }
+    }`,
+    { variables: { id: groupId } },
+  );
+  const json = await response.json();
+  throwOnUserErrors(json, "sellingPlanGroup");
+  const node = json?.data?.sellingPlanGroup;
+  if (!node || node.appId !== SUBSCRIFY_APP_ID) {
+    throw new SellingPlanApiError(
+      "Selling plan group not found or not owned by Marka Subscrify.",
+      [],
+    );
+  }
+}
+
 export async function updateProgram(
   admin: AdminClient,
   groupId: string,
@@ -221,6 +268,7 @@ export async function updateProgram(
   planIds: Array<string | null>,
   currentPlanIds: string[],
 ): Promise<void> {
+  await assertOwnedByApp(admin, groupId);
   const input = toSellingPlanGroupUpdateInput(config, planIds, currentPlanIds);
   const response = await admin.graphql(
     `#graphql
@@ -241,6 +289,7 @@ export async function setProgramProducts(
   desiredProductIds: string[],
   currentProductIds: string[],
 ): Promise<void> {
+  await assertOwnedByApp(admin, groupId);
   const desired = new Set(desiredProductIds);
   const current = new Set(currentProductIds);
   const toAdd = desiredProductIds.filter((id) => !current.has(id));
@@ -275,6 +324,7 @@ export async function setProgramProducts(
 }
 
 export async function deleteProgram(admin: AdminClient, groupId: string): Promise<void> {
+  await assertOwnedByApp(admin, groupId);
   const response = await admin.graphql(
     `#graphql
     mutation subscrifyDeleteGroup($id: ID!) {
