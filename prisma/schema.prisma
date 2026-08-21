@@ -55,7 +55,12 @@ model BillingCycleAttempt {
 
   // ENQUEUED -> CHARGING -> SUCCEEDED
   //                       -> FAILED -> (dunning schedules a new row, attemptNumber+1)
-  //                       -> REQUIRES_ACTION (3-D Secure challenge, unresolved)
+  //                       -> REQUIRES_ACTION (3-D Secure challenge, unresolved;
+  //                          can still resolve to SUCCEEDED via a later webhook)
+  //                       -> SKIPPED (a scheduled dunning retry found the cycle
+  //                          already SUCCEEDED under a different attempt, or the
+  //                          contract was no longer billable at charge time —
+  //                          see hasSucceededAttemptForCycle in store.server.ts)
   //                       -> DEAD_LETTERED (Service Bus gave up redelivering the message itself)
   status                  String    @default("ENQUEUED")
 
