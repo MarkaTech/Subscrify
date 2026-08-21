@@ -20,7 +20,8 @@ export type BillingAttemptStatus =
   | "SUCCEEDED"
   | "FAILED"
   | "REQUIRES_ACTION"
-  | "DEAD_LETTERED";
+  | "DEAD_LETTERED"
+  | "SKIPPED";
 
 /**
  * Explicit shape of a BillingCycleAttempt row, mirrored from
@@ -136,7 +137,18 @@ export async function markFailed(
 
 /**
  * Guarded the same way as markFailed — a stray success signal can never
- * apply to a row that isn't still in flight.
+ * apply to a row that's already terminal (SUCCEEDED/FAILED/SKIPPED).
+ *
+ * REQUIRES_ACTION is deliberately included alongside ENQUEUED/CHARGING: a
+ * 3-D Secure challenge that gets resolved arrives as a `success` webhook for
+ * an attempt that's currently sitting in REQUIRES_ACTION, not ENQUEUED or
+ * CHARGING. Before this included REQUIRES_ACTION, that success webhook was a
+ * silent no-op — the original attempt never got marked SUCCEEDED, and the
+ * dunning retry scheduled the moment the challenge was issued (see
+ * webhook-handler.server.ts) went on to fire days later regardless,
+ * double-charging the customer. See hasSucceededAttemptForCycle for the
+ * other half of that fix: the retry itself also has to check before it
+ * charges.
  */
 export async function markSucceeded(
   db: PrismaClient,
@@ -144,7 +156,7 @@ export async function markSucceeded(
   params: { shopifyBillingAttemptGid?: string | null },
 ): Promise<{ applied: boolean }> {
   const result = await db.billingCycleAttempt.updateMany({
-    where: { idempotencyKey, status: { in: ["ENQUEUED", "CHARGING"] } },
+    where: { idempotencyKey, status: { in: ["ENQUEUED", "CHARGING", "REQUIRES_ACTION"] } },
     data: {
       status: "SUCCEEDED",
       shopifyBillingAttemptGid: params.shopifyBillingAttemptGid ?? undefined,
@@ -154,8 +166,53 @@ export async function markSucceeded(
   return { applied: result.count > 0 };
 }
 
+/**
+ * Mark a row SKIPPED without ever calling Shopify — used when a scheduled
+ * dunning retry is about to fire but the cycle it targets already succeeded
+ * under a different attempt (see hasSucceededAttemptForCycle). Distinct from
+ * FAILED so the billing-history UI never shows a declined-looking badge for
+ * a cycle that was, in fact, paid.
+ */
+export async function markSkipped(
+  db: PrismaClient,
+  idempotencyKey: string,
+  params: { errorCode?: string | null; errorMessage?: string | null },
+): Promise<{ applied: boolean }> {
+  const result = await db.billingCycleAttempt.updateMany({
+    where: { idempotencyKey, status: { in: ["ENQUEUED", "CHARGING"] } },
+    data: {
+      status: "SKIPPED",
+      errorCode: params.errorCode ?? null,
+      errorMessage: params.errorMessage ?? null,
+      completedAt: new Date(),
+    },
+  });
+  return { applied: result.count > 0 };
+}
+
 export async function findByIdempotencyKey(db: PrismaClient, idempotencyKey: string) {
   return db.billingCycleAttempt.findUnique({ where: { idempotencyKey } });
+}
+
+/**
+ * True if this contract-cycle already has a SUCCEEDED attempt, under any
+ * attempt number. A scheduled dunning retry calls this immediately before
+ * charging: if a 3-D Secure challenge on an earlier attempt resolved
+ * successfully after the retry was already enqueued, this stops the retry
+ * from charging the same cycle a second time. This is invariant #1 (never
+ * overbill)'s last line of defense for that race — see markSucceeded.
+ */
+export async function hasSucceededAttemptForCycle(
+  db: PrismaClient,
+  shop: string,
+  subscriptionContractGid: string,
+  billingCycleIndex: number,
+): Promise<boolean> {
+  const existing = await db.billingCycleAttempt.findFirst({
+    where: { shop, subscriptionContractGid, billingCycleIndex, status: "SUCCEEDED" },
+    select: { id: true },
+  });
+  return existing !== null;
 }
 
 /** Recent billing attempts for one contract — for the admin's "billing history" view. */

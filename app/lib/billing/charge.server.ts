@@ -14,13 +14,16 @@ import type { PrismaClient } from "@prisma/client";
 import type { AdminClient } from "../selling-plans/api.server";
 import { billingRetryIdempotencyKey, type BillingCycleRef } from "./idempotency.server";
 import { decideDunning, isRetryableMutationError } from "./dunning.server";
-import { chargeBillingCycle } from "./queries.server";
+import { chargeBillingCycle, fetchContractStatus } from "./queries.server";
+import { isBillableStatus } from "./scheduler.server";
 import {
   attachShopifyAttempt,
   enqueueAttempt,
   findByIdempotencyKey,
+  hasSucceededAttemptForCycle,
   markCharging,
   markFailed,
+  markSkipped,
 } from "./store.server";
 import { sendBillingAttemptMessage, type BillingAttemptMessage } from "./queue.server";
 
@@ -159,6 +162,47 @@ export async function processBillingAttemptMessage(
   }
   if (row.status !== "ENQUEUED") {
     // Redelivery of a message we've already acted on — no-op, not an error.
+    return;
+  }
+
+  // A dunning retry can be scheduled days in advance (see dunning.server.ts).
+  // If the attempt it's retrying was a 3-D Secure challenge that later
+  // resolved successfully, the cycle is already paid by the time this retry
+  // fires — charging again would violate invariant #1. Check the cycle, not
+  // just this row, right before charging: this is the guard that closes the
+  // 3DS-challenge double-charge gap (see markSucceeded's doc comment).
+  if (
+    await hasSucceededAttemptForCycle(
+      db,
+      message.shop,
+      message.subscriptionContractGid,
+      message.billingCycleIndex,
+    )
+  ) {
+    await markSkipped(db, message.idempotencyKey, {
+      errorCode: "CYCLE_ALREADY_SUCCEEDED",
+      errorMessage:
+        "Billing cycle already succeeded under an earlier attempt (e.g. a delayed 3-D Secure resolution); retry skipped.",
+    });
+    return;
+  }
+
+  // The scheduler's own enqueue is covered (fetchDueContracts filters on
+  // status:ACTIVE, re-checked by isContractDue) and so is the manual
+  // "bill now" action (forceBillContractNow's explicit status guard) — but a
+  // dunning retry can sit scheduled for 3-7 days (see dunning.server.ts)
+  // between being enqueued and actually firing here. A customer can cancel
+  // or pause in that window; nothing upstream of this point re-checks status
+  // at the moment of the actual charge. Re-check live rather than trust the
+  // state the contract was in when the retry was scheduled — same standard
+  // forceBillContractNow already holds itself to, applied to the one path
+  // that was missing it.
+  const status = await fetchContractStatus(admin, message.subscriptionContractGid);
+  if (!isBillableStatus(status)) {
+    await markSkipped(db, message.idempotencyKey, {
+      errorCode: "CONTRACT_NOT_BILLABLE",
+      errorMessage: `Contract status is ${status ?? "UNKNOWN"} at charge time; retry skipped without charging.`,
+    });
     return;
   }
 
