@@ -139,6 +139,8 @@ function attemptTone(status: string): "success" | "critical" | "warning" | "info
       return "critical";
     case "REQUIRES_ACTION":
       return "warning";
+    case "SKIPPED":
+      return "info";
     default:
       return "info";
   }
