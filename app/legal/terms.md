@@ -1,8 +1,8 @@
 # Merchant Terms of Service and Data Processing Addendum — Marka Subscrify
 
-**Last updated: 12 August 2026**
+**Last updated: 26 August 2026**
 
-These terms govern your use of the Marka Subscrify Shopify app, published by **MARKA MODERN RETAIL PRIVATE LIMITED** ("we", "us"), registered in India at [REGISTERED OFFICE ADDRESS]. Installing the app on your Shopify store means you accept them. If you're accepting on behalf of a company, you confirm you're authorised to bind it.
+These terms govern your use of the Marka Subscrify Shopify app, published by **MARKA MODERN RETAIL PRIVATE LIMITED** ("we", "us"), registered in India, trading as House of Marka, at Basement, Plot No. 39, Sector 27, Gurugram, Haryana 122001, India. Installing the app on your Shopify store means you accept them. If you're accepting on behalf of a company, you confirm you're authorised to bind it.
 
 ---
 
@@ -32,11 +32,11 @@ We take this seriously, but you should still reconcile your own payouts. If you 
 
 ## 5. Fees
 
-[PRICING — CONFIRM BEFORE PUBLISHING. If the app is free at launch, say so plainly here: "The app is currently free to use. If we introduce charges we will give at least 30 days' notice in the app and by email, and you may uninstall before they take effect." If it is paid, state the plan, the billing interval, that charges are made through Shopify's billing system and appear on your Shopify invoice, and your trial and refund terms.]
+The app is currently free to use. If we introduce charges we will give at least 30 days' notice in the app and by email, and you may uninstall before they take effect. Any future charges would be made through Shopify's billing system and appear on your Shopify invoice.
 
 ## 6. Availability and support
 
-We aim to keep the app available continuously and to execute renewals on schedule, but we don't offer a contractual uptime guarantee. Scheduled maintenance will be announced where practical. Support is available by email at [SUPPORT EMAIL]; we aim to respond within [SUPPORT RESPONSE TIME — e.g. two business days].
+We aim to keep the app available continuously and to execute renewals on schedule, but we don't offer a contractual uptime guarantee. Scheduled maintenance will be announced where practical. Support is available by email at support@houseofmarka.com; we aim to respond within 24 hours on business days.
 
 ## 7. Acceptable use
 
@@ -56,7 +56,7 @@ On uninstall, your data is deleted as described in Part B, section 8.
 
 The app is provided "as is" and "as available", without warranties of any kind except those that cannot lawfully be excluded.
 
-To the maximum extent permitted by law, we are not liable for indirect, incidental, special or consequential losses, or for lost profits, revenue, goodwill or data. Our total aggregate liability arising out of or relating to the app is limited to the greater of the fees you paid us in the twelve months before the event giving rise to the claim, or [LIABILITY FLOOR — e.g. INR 10,000].
+To the maximum extent permitted by law, we are not liable for indirect, incidental, special or consequential losses, or for lost profits, revenue, goodwill or data. Our total aggregate liability arising out of or relating to the app is limited to the greater of the fees you paid us in the twelve months before the event giving rise to the claim, or INR 10,000.
 
 Nothing in this section limits liability for fraud, wilful misconduct, death or personal injury caused by negligence, or anything else that cannot be limited under applicable law.
 
@@ -70,7 +70,7 @@ We may update these terms. Material changes take effect 30 days after we notify 
 
 ## 13. Governing law
 
-These terms are governed by the laws of India, and the courts at [CITY — e.g. Mumbai] have exclusive jurisdiction, except where mandatory consumer or data protection law in your own country gives you the right to bring proceedings there.
+These terms are governed by the laws of India, and the courts at Gurugram, Haryana have exclusive jurisdiction, except where mandatory consumer or data protection law in your own country gives you the right to bring proceedings there.
 
 ---
 
@@ -134,7 +134,7 @@ Data is processed in India. For transfers of EEA or UK personal data, the partie
 
 ## 11. Contact
 
-Data protection queries: [SUPPORT / PRIVACY EMAIL], attention [GRIEVANCE CONTACT NAME].
+Data protection queries: support@houseofmarka.com, marked "Attention: Grievance Officer".
 
 ---
 

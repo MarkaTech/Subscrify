@@ -1,8 +1,8 @@
 # Privacy Policy — Marka Subscrify
 
-**Last updated: 12 August 2026**
+**Last updated: 26 August 2026**
 
-Marka Subscrify ("the app") is a Shopify app published by **MARKA MODERN RETAIL PRIVATE LIMITED** ("we", "us"), a company incorporated in India with its registered office at [REGISTERED OFFICE ADDRESS]. This policy explains what personal data the app handles, why, and what we do and don't keep.
+Marka Subscrify ("the app") is a Shopify app published by **MARKA MODERN RETAIL PRIVATE LIMITED** ("we", "us"), a company incorporated in India, trading as House of Marka, with its registered office at Basement, Plot No. 39, Sector 27, Gurugram, Haryana 122001, India. This policy explains what personal data the app handles, why, and what we do and don't keep.
 
 It covers the app only. It does not cover the practices of the merchants who install it — each Shopify store has its own privacy policy governing how that store treats its customers' data.
 
@@ -61,9 +61,9 @@ We will disclose data if compelled by a valid legal process, and will tell the a
 
 Session records are deleted when the app is uninstalled from a store.
 
-Billing attempt records are retained for **[24 MONTHS — CONFIRM]** from the date of the attempt on an active store, after which they are deleted automatically. They are deleted in full, ahead of that period, when Shopify sends us a shop erasure request — which happens roughly 48 hours after an app is uninstalled.
+Billing attempt records are retained for **24 months** from the date of the attempt on an active store, after which they are deleted automatically by a scheduled purge. They are deleted in full, ahead of that period, when Shopify sends us a shop erasure request — which happens roughly 48 hours after an app is uninstalled.
 
-Operational and access logs are retained for the period configured on our Azure Log Analytics workspace, currently **[LOG RETENTION — CONFIRM, e.g. 90 days]**.
+Operational and access logs are retained for the period configured on our Azure Log Analytics workspace, currently **30 days**.
 
 ## 8. Requests from customers
 
@@ -91,13 +91,13 @@ Depending on where you live, you may have rights to access, correct, delete, res
 
 We have never sold or shared personal data for cross-context behavioural advertising, and we do not process the data of anyone we know to be under 16.
 
-To exercise a right, or to raise a grievance under the DPDP Act, contact [GRIEVANCE CONTACT NAME] at the address in section 12. We respond within 30 days.
+To exercise a right, or to raise a grievance under the DPDP Act, contact our designated Grievance Officer at the address in section 12, marking your message "Attention: Grievance Officer". We respond within 30 days.
 
 ## 12. Contact
 
 MARKA MODERN RETAIL PRIVATE LIMITED
-[REGISTERED OFFICE ADDRESS]
-Email: [SUPPORT / PRIVACY EMAIL]
+Basement, Plot No. 39, Sector 27, Gurugram, Haryana 122001, India
+Email: support@houseofmarka.com
 
 ## 13. Changes
 
