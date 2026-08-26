@@ -1,7 +1,10 @@
-import type { MetaFunction } from "react-router";
+import type { HeadersFunction, MetaFunction } from "react-router";
 import source from "../legal/privacy.md?raw";
 import { renderMarkdown } from "../lib/legal/markdown";
+import { publicPageHeaders } from "../lib/http/security-headers";
 import styles from "../styles/legal.module.css";
+
+export const headers: HeadersFunction = () => publicPageHeaders();
 
 /**
  * The published privacy policy, at a stable public URL.
