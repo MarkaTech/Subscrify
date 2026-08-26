@@ -68,29 +68,38 @@ export async function fetchDueContracts(
 }
 
 /**
- * Cycles are fetched by INDEX range, not date range, everywhere in this
- * module. This is deliberate and load-bearing: Shopify rejects
- * billingCyclesDateRangeSelector spans past an undocumented limit with a
- * top-level GraphQL error, and admin.graphql THROWS on top-level errors —
- * the manual "bill now" action crashed exactly this way in live testing on
- * 2026-08-26 (its old window spanned 800 days). Index ranges have no such
- * limit, indices start at 1 and only grow, and every date decision this
- * engine makes (is the cycle due?) already lives client-side in
- * scheduler.server.ts's pickDueCycle. Fetching a page of cycles by index
- * and deciding locally removes the whole range-limit failure class — for
- * the scheduler too, which would otherwise have hit the same throw on the
- * first day a real contract came due.
+ * Cycles are fetched by INDEX range in small rolling windows. Both halves of
+ * that sentence are load-bearing, learned from live failures on 2026-08-26:
+ *
+ * 1. Shopify enforces "you can query up to one year of billing cycles after
+ *    the last time you updated or billed the contract" (billing-cycles docs,
+ *    Limitations). A selector that reaches past that — the old 800-day DATE
+ *    window, or a greedy index range like 1..1000 — fails with the top-level
+ *    GraphQL error "Upcoming billing cycle selected past limit.", and
+ *    admin.graphql THROWS on top-level errors. The manual bill-now action
+ *    crashed exactly this way, twice, once per selector style.
+ *
+ * 2. Small windows sidestep the limit *by construction*: a window of
+ *    CYCLES_WINDOW cycles spans at most CYCLES_WINDOW billing intervals,
+ *    far less than a year of cycles for every interval the app sells; and
+ *    the earliest UNBILLED cycle always sits within one interval of the
+ *    last-billed cycle, i.e. safely inside the queryable year — so walking
+ *    windows from index 1 and stopping at the first unbilled cycle finds it
+ *    before any window can cross the limit. If a window does cross it
+ *    (every earlier cycle billed and the search has run out of queryable
+ *    future), that error is treated as end-of-search, not a crash.
+ *
+ * Every date decision (is the cycle due?) stays client-side in
+ * scheduler.server.ts's pickDueCycle, unchanged.
  */
 const BILLING_CYCLES_BY_INDEX_QUERY = `#graphql
-  query SubscrifyBillingCyclesByIndex($contractId: ID!, $first: Int!, $after: String) {
+  query SubscrifyBillingCyclesByIndex($contractId: ID!, $startIndex: Int!, $endIndex: Int!, $first: Int!) {
     subscriptionBillingCycles(
       contractId: $contractId
-      billingCyclesIndexRangeSelector: { startIndex: 1, endIndex: 1000 }
+      billingCyclesIndexRangeSelector: { startIndex: $startIndex, endIndex: $endIndex }
       first: $first
-      after: $after
     ) {
       edges {
-        cursor
         node {
           cycleIndex
           billingAttemptExpectedDate
@@ -98,46 +107,61 @@ const BILLING_CYCLES_BY_INDEX_QUERY = `#graphql
           skipped
         }
       }
-      pageInfo { hasNextPage }
     }
   }
 `;
 
-const CYCLES_PAGE_SIZE = 50;
-const CYCLES_MAX_PAGES = 5;
+const CYCLES_WINDOW = 36;
+const CYCLES_MAX_WINDOWS = 7; // 252 cycles ≈ 21 years of a monthly plan
+
+function isPastLimitError(e: unknown): boolean {
+  const message =
+    (e as any)?.message ??
+    (typeof e === "string" ? e : "");
+  return /past limit/i.test(String(message));
+}
 
 /**
- * All of a contract's billing cycles from index 1, ascending, up to
- * CYCLES_MAX_PAGES pages (250 cycles ≈ 20 years of a monthly plan). Long
- * histories of BILLED cycles are paged past; the callers only ever care
- * about the earliest UNBILLED one.
+ * A contract's billing cycles from index 1, ascending, stopping at the
+ * window that contains the first unbilled cycle (or at Shopify's
+ * one-year-ahead query limit, whichever comes first).
  */
 async function fetchCyclesFromStart(
   admin: AdminClient,
   contractGid: string,
 ): Promise<BillingCycleCandidate[]> {
   const cycles: BillingCycleCandidate[] = [];
-  let after: string | null = null;
 
-  for (let page = 0; page < CYCLES_MAX_PAGES; page += 1) {
-    const response = await admin.graphql(BILLING_CYCLES_BY_INDEX_QUERY, {
-      variables: { contractId: contractGid, first: CYCLES_PAGE_SIZE, after },
-    });
-    const json = await response.json();
-    const connection = json?.data?.subscriptionBillingCycles;
-    const edges = connection?.edges ?? [];
+  for (let w = 0; w < CYCLES_MAX_WINDOWS; w += 1) {
+    const startIndex = 1 + w * CYCLES_WINDOW;
+    const endIndex = startIndex + CYCLES_WINDOW - 1;
+
+    let edges: Array<{ node: BillingCycleCandidate }>;
+    try {
+      const response = await admin.graphql(BILLING_CYCLES_BY_INDEX_QUERY, {
+        variables: {
+          contractId: contractGid,
+          startIndex,
+          endIndex,
+          first: CYCLES_WINDOW,
+        },
+      });
+      const json = await response.json();
+      edges = json?.data?.subscriptionBillingCycles?.edges ?? [];
+    } catch (e) {
+      // The window reached past Shopify's queryable year. Whatever was
+      // collected so far is the complete answerable set — see the module
+      // comment for why the first unbilled cycle can never be out here.
+      if (isPastLimitError(e)) break;
+      throw e;
+    }
+
     for (const { node } of edges) cycles.push(node);
 
-    // Stop as soon as this page contains an unbilled cycle — everything the
-    // callers select comes at or before the first one.
-    if (
-      cycles.some((c) => c.status === "UNBILLED" && !c.skipped) ||
-      !connection?.pageInfo?.hasNextPage ||
-      edges.length === 0
-    ) {
-      break;
-    }
-    after = edges[edges.length - 1].cursor;
+    const foundUnbilled = edges.some(
+      ({ node }) => node.status === "UNBILLED" && !node.skipped,
+    );
+    if (foundUnbilled || edges.length < CYCLES_WINDOW) break;
   }
 
   return cycles;
