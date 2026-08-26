@@ -100,8 +100,21 @@ export const action = async ({ params, request }: ActionFunctionArgs) => {
     return { lifecycle, action: wanted };
   }
 
-  const result = await forceBillContractNow(db, admin, session.shop, gid);
-  return { result };
+  try {
+    const result = await forceBillContractNow(db, admin, session.shop, gid);
+    return { result };
+  } catch (e: any) {
+    // A transient Shopify/API failure must degrade to a message, never to
+    // the route's error boundary — this action charges money, and "the page
+    // exploded" tells the merchant nothing about whether anything happened.
+    // (This exact path crashed in live testing on 2026-08-26 when the old
+    // date-window cycle query drew a top-level GraphQL error and
+    // admin.graphql threw.) Log the message for Log Analytics; no payloads.
+    console.error(
+      `[bill-now] failed for ${gid} on ${session.shop}: ${e?.message ?? e}`,
+    );
+    return { result: { outcome: "error" as const } };
+  }
 };
 
 function formatDate(iso: string | null): string {
@@ -319,6 +332,8 @@ export default function ContractDetail() {
             {result.outcome === "nothing_to_bill" && "Nothing unbilled to charge right now."}
             {result.outcome === "not_billable" &&
               `This subscription is ${result.status} and was not charged.`}
+            {result.outcome === "error" &&
+              "Couldn't reach Shopify to check this subscription's billing cycles. Nothing was charged — try again in a moment."}
           </s-paragraph>
         ) : null}
 
