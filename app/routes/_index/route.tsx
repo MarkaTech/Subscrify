@@ -1,9 +1,16 @@
-import type { LoaderFunctionArgs, MetaFunction } from "react-router";
+import type {
+  HeadersFunction,
+  LoaderFunctionArgs,
+  MetaFunction,
+} from "react-router";
 import { redirect, Form, useLoaderData } from "react-router";
 
 import { login } from "../../shopify.server";
+import { publicPageHeaders } from "../../lib/http/security-headers";
 
 import styles from "./styles.module.css";
+
+export const headers: HeadersFunction = () => publicPageHeaders();
 
 export const meta: MetaFunction = () => [
   { title: "Marka Subscrify — Subscriptions for Shopify" },
