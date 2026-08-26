@@ -67,14 +67,30 @@ export async function fetchDueContracts(
   return due;
 }
 
-const BILLING_CYCLES_QUERY = `#graphql
-  query SubscrifyBillingCycles($contractId: ID!, $startDate: DateTime!, $endDate: DateTime!) {
+/**
+ * Cycles are fetched by INDEX range, not date range, everywhere in this
+ * module. This is deliberate and load-bearing: Shopify rejects
+ * billingCyclesDateRangeSelector spans past an undocumented limit with a
+ * top-level GraphQL error, and admin.graphql THROWS on top-level errors —
+ * the manual "bill now" action crashed exactly this way in live testing on
+ * 2026-08-26 (its old window spanned 800 days). Index ranges have no such
+ * limit, indices start at 1 and only grow, and every date decision this
+ * engine makes (is the cycle due?) already lives client-side in
+ * scheduler.server.ts's pickDueCycle. Fetching a page of cycles by index
+ * and deciding locally removes the whole range-limit failure class — for
+ * the scheduler too, which would otherwise have hit the same throw on the
+ * first day a real contract came due.
+ */
+const BILLING_CYCLES_BY_INDEX_QUERY = `#graphql
+  query SubscrifyBillingCyclesByIndex($contractId: ID!, $first: Int!, $after: String) {
     subscriptionBillingCycles(
       contractId: $contractId
-      billingCyclesDateRangeSelector: { startDate: $startDate, endDate: $endDate }
-      first: 50
+      billingCyclesIndexRangeSelector: { startIndex: 1, endIndex: 1000 }
+      first: $first
+      after: $after
     ) {
       edges {
+        cursor
         node {
           cycleIndex
           billingAttemptExpectedDate
@@ -82,34 +98,61 @@ const BILLING_CYCLES_QUERY = `#graphql
           skipped
         }
       }
+      pageInfo { hasNextPage }
     }
   }
 `;
 
+const CYCLES_PAGE_SIZE = 50;
+const CYCLES_MAX_PAGES = 5;
+
+/**
+ * All of a contract's billing cycles from index 1, ascending, up to
+ * CYCLES_MAX_PAGES pages (250 cycles ≈ 20 years of a monthly plan). Long
+ * histories of BILLED cycles are paged past; the callers only ever care
+ * about the earliest UNBILLED one.
+ */
+async function fetchCyclesFromStart(
+  admin: AdminClient,
+  contractGid: string,
+): Promise<BillingCycleCandidate[]> {
+  const cycles: BillingCycleCandidate[] = [];
+  let after: string | null = null;
+
+  for (let page = 0; page < CYCLES_MAX_PAGES; page += 1) {
+    const response = await admin.graphql(BILLING_CYCLES_BY_INDEX_QUERY, {
+      variables: { contractId: contractGid, first: CYCLES_PAGE_SIZE, after },
+    });
+    const json = await response.json();
+    const connection = json?.data?.subscriptionBillingCycles;
+    const edges = connection?.edges ?? [];
+    for (const { node } of edges) cycles.push(node);
+
+    // Stop as soon as this page contains an unbilled cycle — everything the
+    // callers select comes at or before the first one.
+    if (
+      cycles.some((c) => c.status === "UNBILLED" && !c.skipped) ||
+      !connection?.pageInfo?.hasNextPage ||
+      edges.length === 0
+    ) {
+      break;
+    }
+    after = edges[edges.length - 1].cursor;
+  }
+
+  return cycles;
+}
+
 /**
  * The earliest due, unbilled, unskipped billing cycle for a contract, or
- * null if there's nothing to charge right now. Looks back far enough to
- * catch a backlog from extended downtime (~13 months) without unbounded
- * lookback on every tick.
+ * null if there's nothing to charge right now.
  */
 export async function fetchDueCycle(
   admin: AdminClient,
   contractGid: string,
   now: Date,
 ): Promise<BillingCycleCandidate | null> {
-  const startDate = new Date(now.getTime() - 400 * 24 * 60 * 60 * 1000);
-  const response = await admin.graphql(BILLING_CYCLES_QUERY, {
-    variables: {
-      contractId: contractGid,
-      startDate: startDate.toISOString(),
-      endDate: now.toISOString(),
-    },
-  });
-  const json = await response.json();
-  const cycles: BillingCycleCandidate[] = (
-    json?.data?.subscriptionBillingCycles?.edges ?? []
-  ).map(({ node }: any) => node);
-
+  const cycles = await fetchCyclesFromStart(admin, contractGid);
   return pickDueCycle(cycles, now);
 }
 
@@ -156,26 +199,18 @@ export async function fetchContractStatus(
  * (BILLING_CYCLE_CHARGE_BEFORE_EXPECTED_DATE), and that rejection flows
  * through the same non-retryable-error handling as any other terminal
  * mutation error.
+ *
+ * `now` is unused since the index-range rewrite (see
+ * BILLING_CYCLES_BY_INDEX_QUERY) but kept in the signature so callers keep
+ * passing their clock — a future date-based refinement shouldn't need a
+ * call-site change.
  */
 export async function fetchEarliestUnbilledCycle(
   admin: AdminClient,
   contractGid: string,
-  now: Date,
+  _now: Date,
 ): Promise<BillingCycleCandidate | null> {
-  const startDate = new Date(now.getTime() - 400 * 24 * 60 * 60 * 1000);
-  const endDate = new Date(now.getTime() + 400 * 24 * 60 * 60 * 1000);
-  const response = await admin.graphql(BILLING_CYCLES_QUERY, {
-    variables: {
-      contractId: contractGid,
-      startDate: startDate.toISOString(),
-      endDate: endDate.toISOString(),
-    },
-  });
-  const json = await response.json();
-  const cycles: BillingCycleCandidate[] = (
-    json?.data?.subscriptionBillingCycles?.edges ?? []
-  ).map(({ node }: any) => node);
-
+  const cycles = await fetchCyclesFromStart(admin, contractGid);
   const unbilled = cycles
     .filter((c) => !c.skipped && c.status === "UNBILLED")
     .sort((a, b) => a.cycleIndex - b.cycleIndex);
