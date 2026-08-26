@@ -123,6 +123,9 @@ export async function applyFailureRecovery(
     billingCycleIndex: ctx.billingCycleIndex,
     attemptNumber: plan.retry.attemptNumber,
     idempotencyKey: plan.retry.idempotencyKey,
+    // Recorded on the retry row so the reconciliation sweep knows this row
+    // is *supposed* to sit idle until then — see EnqueueAttemptParams.
+    nextRetryAt: plan.retry.scheduledEnqueueTimeUtc,
   });
   if (!created) return;
 

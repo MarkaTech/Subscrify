@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  deleteTerminalAttemptsOlderThan,
   enqueueAttempt,
   hasSucceededAttemptForCycle,
+  listInFlightAttemptsOlderThan,
+  markDeadLettered,
   markFailed,
   markSkipped,
   markSucceeded,
@@ -49,8 +52,8 @@ function fakeDb() {
           shopifyBillingAttemptGid: null,
           errorCode: null,
           errorMessage: null,
-          nextRetryAt: null,
-          enqueuedAt: new Date(),
+          nextRetryAt: data.nextRetryAt ?? null,
+          enqueuedAt: data.enqueuedAt ?? new Date(),
           completedAt: null,
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -82,6 +85,32 @@ function fakeDb() {
       },
       async findUnique({ where }: { where: any }) {
         return rows.find((r) => r.idempotencyKey === where.idempotencyKey) ?? null;
+      },
+      async findMany({ where, take }: { where: any; take?: number }) {
+        const statusIn: string[] | undefined = where?.status?.in;
+        const before: Date | undefined = where?.enqueuedAt?.lt;
+        const matched = rows.filter(
+          (r) =>
+            (!statusIn || statusIn.includes(r.status)) &&
+            (!before || r.enqueuedAt.getTime() < before.getTime()),
+        );
+        return take ? matched.slice(0, take) : matched;
+      },
+      async deleteMany({ where }: { where: any }) {
+        const statusIn: string[] | undefined = where?.status?.in;
+        const before: Date | undefined = where?.enqueuedAt?.lt;
+        const keep: BillingAttemptRecord[] = [];
+        let count = 0;
+        for (const r of rows) {
+          const matches =
+            (!statusIn || statusIn.includes(r.status)) &&
+            (!before || r.enqueuedAt.getTime() < before.getTime());
+          if (matches) count += 1;
+          else keep.push(r);
+        }
+        rows.length = 0;
+        rows.push(...keep);
+        return { count };
       },
     },
   } as any;
@@ -167,5 +196,80 @@ describe("the 3-D Secure challenge double-charge fix", () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(db.rows.filter((r: BillingAttemptRecord) => r.idempotencyKey === key)).toHaveLength(1);
+  });
+
+  it("enqueueAttempt records a dunning retry's scheduled fire time on the row", async () => {
+    const db = fakeDb();
+    const fireAt = new Date("2026-09-01T00:00:00.000Z");
+    await enqueueAttempt(db, {
+      shop, subscriptionContractGid: contract, billingCycleIndex: 2,
+      attemptNumber: 2, idempotencyKey: "retry-with-schedule", nextRetryAt: fireAt,
+    });
+    expect(db.rows[0].nextRetryAt?.toISOString()).toBe(fireAt.toISOString());
+  });
+});
+
+describe("dead-letter bookkeeping", () => {
+  it("markDeadLettered transitions an in-flight row and records the reason", async () => {
+    const db = fakeDb();
+    await db.billingCycleAttempt.create({
+      data: { shop, subscriptionContractGid: contract, billingCycleIndex: 2, attemptNumber: 1, idempotencyKey: "dlq", status: "CHARGING" },
+    });
+    const result = await markDeadLettered(db, "dlq", { errorMessage: "MaxDeliveryCountExceeded" });
+    expect(result.applied).toBe(true);
+    expect(db.rows[0].status).toBe("DEAD_LETTERED");
+    expect(db.rows[0].errorMessage).toBe("MaxDeliveryCountExceeded");
+  });
+
+  it("markDeadLettered never downgrades a row a webhook already resolved", async () => {
+    const db = fakeDb();
+    await db.billingCycleAttempt.create({
+      data: { shop, subscriptionContractGid: contract, billingCycleIndex: 2, attemptNumber: 1, idempotencyKey: "resolved", status: "SUCCEEDED" },
+    });
+    const result = await markDeadLettered(db, "resolved", { errorMessage: "late DLQ" });
+    expect(result.applied).toBe(false);
+    expect(db.rows[0].status).toBe("SUCCEEDED");
+  });
+});
+
+describe("retention purge and stale listing", () => {
+  const old = new Date("2024-01-01T00:00:00.000Z");
+  const recent = new Date("2026-08-01T00:00:00.000Z");
+  const cutoff = new Date("2024-08-26T00:00:00.000Z");
+
+  it("deleteTerminalAttemptsOlderThan deletes only terminal rows past the cutoff", async () => {
+    const db = fakeDb();
+    const mk = (key: string, status: string, enqueuedAt: Date) =>
+      db.billingCycleAttempt.create({
+        data: { shop, subscriptionContractGid: contract, billingCycleIndex: 1, attemptNumber: 1, idempotencyKey: key, status, enqueuedAt },
+      });
+    await mk("old-succeeded", "SUCCEEDED", old);
+    await mk("old-failed", "FAILED", old);
+    await mk("old-in-flight", "CHARGING", old); // stuck row: NEVER purged
+    await mk("old-requires-action", "REQUIRES_ACTION", old); // in-flight-ish: kept
+    await mk("recent-succeeded", "SUCCEEDED", recent);
+
+    const { deleted } = await deleteTerminalAttemptsOlderThan(db, cutoff);
+    expect(deleted).toBe(2);
+    const remaining = db.rows.map((r: BillingAttemptRecord) => r.idempotencyKey).sort();
+    expect(remaining).toEqual(["old-in-flight", "old-requires-action", "recent-succeeded"]);
+  });
+
+  it("listInFlightAttemptsOlderThan returns only in-flight rows older than the bound", async () => {
+    const db = fakeDb();
+    const mk = (key: string, status: string, enqueuedAt: Date) =>
+      db.billingCycleAttempt.create({
+        data: { shop, subscriptionContractGid: contract, billingCycleIndex: 1, attemptNumber: 1, idempotencyKey: key, status, enqueuedAt },
+      });
+    await mk("old-charging", "CHARGING", old);
+    await mk("old-enqueued", "ENQUEUED", old);
+    await mk("old-succeeded", "SUCCEEDED", old);
+    await mk("fresh-charging", "CHARGING", recent);
+
+    const rows = await listInFlightAttemptsOlderThan(db, cutoff);
+    expect(rows.map((r: BillingAttemptRecord) => r.idempotencyKey).sort()).toEqual([
+      "old-charging",
+      "old-enqueued",
+    ]);
   });
 });

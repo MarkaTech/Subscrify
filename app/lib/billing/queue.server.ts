@@ -129,6 +129,57 @@ export function subscribeBillingAttempts(handlers: {
   };
 }
 
+/**
+ * Consume the billing-attempts DEAD-LETTER queue. A message lands here when
+ * Service Bus gave up redelivering it (maxDeliveryCount=5 — see
+ * infra/main.bicep, which also has an alert watching this queue's depth).
+ * The handler's job is bookkeeping, not retrying: mark the local row
+ * DEAD_LETTERED so the merchant-facing billing history stops showing an
+ * attempt as forever in flight, and log the reason loudly. Completing the
+ * message clears the DLQ (and the alert) once it's been recorded.
+ *
+ * `message` is null when the body doesn't parse — entirely possible here,
+ * since a malformed body is one of the ways a message dead-letters in the
+ * first place. The raw message is still passed so the handler can log it.
+ */
+export function subscribeBillingAttemptsDeadLetter(handlers: {
+  handleMessage: (
+    message: BillingAttemptMessage | null,
+    raw: ServiceBusReceivedMessage,
+  ) => Promise<void>;
+  handleError: (err: unknown) => Promise<void>;
+}): { close: () => Promise<void> } {
+  const receiver = getClient().createReceiver(QUEUE_NAME, {
+    receiveMode: "peekLock",
+    subQueueType: "deadLetter",
+  });
+
+  const subscription = receiver.subscribe(
+    {
+      processMessage: async (raw) => {
+        let parsed: BillingAttemptMessage | null = null;
+        try {
+          parsed = parseBillingAttemptMessage(raw.body);
+        } catch {
+          parsed = null;
+        }
+        await handlers.handleMessage(parsed, raw);
+      },
+      processError: async (args) => {
+        await handlers.handleError(args.error);
+      },
+    },
+    { maxConcurrentCalls: 1 },
+  );
+
+  return {
+    close: async () => {
+      await subscription.close();
+      await receiver.close();
+    },
+  };
+}
+
 export async function closeServiceBusClient(): Promise<void> {
   if (sharedClient) {
     await sharedClient.close();

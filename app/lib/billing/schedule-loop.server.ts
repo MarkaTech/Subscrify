@@ -15,9 +15,12 @@
 
 import prisma from "../../db.server";
 import { runSchedulerTick } from "./run-scheduler.server";
+import { reconcileStaleAttempts } from "./reconcile.server";
+import { purgeExpiredBillingAttempts } from "./retention.server";
 
 const TICK_INTERVAL_MS = 5 * 60 * 1000;
 const INITIAL_DELAY_MS = 15_000;
+const PURGE_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
 declare global {
   // eslint-disable-next-line no-var
@@ -39,6 +42,8 @@ export function startBillingSchedulerLoop(): void {
     `[billing-scheduler] starting — tick every ${TICK_INTERVAL_MS / 1000}s`,
   );
 
+  let lastPurgeAt = 0;
+
   const tick = async () => {
     try {
       const result = await runSchedulerTick(prisma, new Date());
@@ -47,6 +52,29 @@ export function startBillingSchedulerLoop(): void {
       }
     } catch (e) {
       console.error("[billing-scheduler] tick failed", e);
+    }
+
+    // Reconciliation sweep piggybacks on the same interval: it's the safety
+    // net for missed webhooks / stuck in-flight rows (see reconcile.server.ts).
+    // Failures here must never take the scheduler down with them.
+    try {
+      const rec = await reconcileStaleAttempts(prisma, new Date());
+      if (rec.checked > 0) {
+        console.log("[billing-reconciler] sweep", JSON.stringify(rec));
+      }
+    } catch (e) {
+      console.error("[billing-reconciler] sweep failed", e);
+    }
+
+    // Retention purge runs at most daily (per process — a restart just runs
+    // it again, which is an idempotent no-op when there's nothing to purge).
+    if (Date.now() - lastPurgeAt >= PURGE_INTERVAL_MS) {
+      lastPurgeAt = Date.now();
+      try {
+        await purgeExpiredBillingAttempts(prisma, new Date());
+      } catch (e) {
+        console.error("[billing-retention] purge failed", e);
+      }
     }
   };
 

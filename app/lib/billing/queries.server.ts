@@ -239,6 +239,74 @@ export async function chargeBillingCycle(
   };
 }
 
+const BILLING_ATTEMPT_STATE_QUERY = `#graphql
+  query SubscrifyBillingAttemptState($id: ID!) {
+    subscriptionBillingAttempt(id: $id) {
+      id
+      state {
+        __typename
+        ... on SubscriptionBillingAttemptFailedState {
+          error {
+            __typename
+            ... on SubscriptionBillingAttemptGeneralError { generalCode: code }
+            ... on SubscriptionBillingAttemptPaymentError { paymentCode: code }
+            ... on SubscriptionBillingAttemptInventoryError { inventoryCode: code }
+            ... on SubscriptionBillingAttemptUnexpectedError { message }
+          }
+        }
+      }
+    }
+  }
+`;
+
+export type BillingAttemptOutcome =
+  | { kind: "pending" }
+  | { kind: "success" }
+  | { kind: "action_required" }
+  | { kind: "failed"; errorCode: string | null; errorMessage: string | null };
+
+/**
+ * Ground truth for one billing attempt, straight from Shopify's state union.
+ * Used by the reconciliation sweep (reconcile.server.ts) when a local row
+ * has sat in flight past the point a webhook should have resolved it —
+ * webhooks are delivered at-least-once but not guaranteed if the app was
+ * down long enough, and this is the recovery path for that. Returns null
+ * when the attempt can't be read (deleted, wrong shop, transient error);
+ * callers treat null as "leave the row alone and warn", never as an outcome.
+ */
+export async function fetchBillingAttemptOutcome(
+  admin: AdminClient,
+  billingAttemptGid: string,
+): Promise<BillingAttemptOutcome | null> {
+  const response = await admin.graphql(BILLING_ATTEMPT_STATE_QUERY, {
+    variables: { id: billingAttemptGid },
+  });
+  const json = await response.json();
+  const state = json?.data?.subscriptionBillingAttempt?.state;
+  if (!state?.__typename) return null;
+
+  switch (state.__typename) {
+    case "SubscriptionBillingAttemptPendingState":
+      return { kind: "pending" };
+    case "SubscriptionBillingAttemptSuccessState":
+      return { kind: "success" };
+    case "SubscriptionBillingAttemptActionRequiredState":
+      return { kind: "action_required" };
+    case "SubscriptionBillingAttemptFailedState": {
+      const error = state.error ?? {};
+      return {
+        kind: "failed",
+        errorCode:
+          error.generalCode ?? error.paymentCode ?? error.inventoryCode ?? null,
+        errorMessage: error.message ?? null,
+      };
+    }
+    default:
+      // A state Shopify adds later — don't guess what it means for money.
+      return null;
+  }
+}
+
 const GET_BILLING_ATTEMPT_QUERY = `#graphql
   query SubscrifyGetBillingAttempt($id: ID!) {
     subscriptionBillingAttempt(id: $id) {

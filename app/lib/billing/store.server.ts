@@ -55,6 +55,16 @@ export interface EnqueueAttemptParams {
   billingCycleIndex: number;
   attemptNumber: number;
   idempotencyKey: string;
+  /**
+   * For dunning retries: when this attempt's queue message is scheduled to
+   * fire (Service Bus holds it until then). Stored on the retry row itself in
+   * `nextRetryAt` so the reconciliation sweep can tell a healthy
+   * scheduled-for-next-week retry apart from a row that's actually stuck —
+   * without this, every 5-day dunning retry would look "stale" the whole
+   * time it waits. On a FAILED row the same column means "when the successor
+   * attempt fires"; on an ENQUEUED row it means "when this attempt fires".
+   */
+  nextRetryAt?: Date | null;
 }
 
 /**
@@ -75,6 +85,7 @@ export async function enqueueAttempt(
         attemptNumber: params.attemptNumber,
         idempotencyKey: params.idempotencyKey,
         status: "ENQUEUED",
+        nextRetryAt: params.nextRetryAt ?? null,
       },
     });
     return { created: true };
@@ -190,8 +201,84 @@ export async function markSkipped(
   return { applied: result.count > 0 };
 }
 
+/**
+ * Terminal transition applied when Service Bus gives up redelivering the
+ * message itself (it lands on the dead-letter queue — see the DLQ receiver
+ * in app/worker/index.ts). Guarded like every other terminal transition:
+ * only an in-flight row can become DEAD_LETTERED, so a message whose row was
+ * already resolved (e.g. dead-lettered *after* a webhook resolved the
+ * attempt) can never downgrade a SUCCEEDED row.
+ */
+export async function markDeadLettered(
+  db: PrismaClient,
+  idempotencyKey: string,
+  params: { errorMessage?: string | null },
+): Promise<{ applied: boolean }> {
+  const result = await db.billingCycleAttempt.updateMany({
+    where: { idempotencyKey, status: { in: ["ENQUEUED", "CHARGING"] } },
+    data: {
+      status: "DEAD_LETTERED",
+      errorCode: "DEAD_LETTERED",
+      errorMessage: params.errorMessage ?? null,
+      completedAt: new Date(),
+    },
+  });
+  return { applied: result.count > 0 };
+}
+
 export async function findByIdempotencyKey(db: PrismaClient, idempotencyKey: string) {
   return db.billingCycleAttempt.findUnique({ where: { idempotencyKey } });
+}
+
+/**
+ * In-flight rows (ENQUEUED/CHARGING) created before `enqueuedBefore` — the
+ * reconciliation sweep's candidate set. Deliberately a coarse DB-side
+ * prefilter: the exact "is it actually stale?" decision (which must respect
+ * a retry's scheduled fire time) lives in reconcile.server.ts where it can
+ * be unit tested. Capped so a pathological backlog can't turn one sweep
+ * into an unbounded scan; the sweep runs every few minutes, so a large
+ * backlog is worked down across ticks.
+ *
+ * Cross-shop by design, like listInstalledShops: this is the operational
+ * sweep over the app's own bookkeeping, and every row it returns is handled
+ * with a per-shop admin client. Invariant #2 concerns merchant-facing
+ * reads/writes, which all remain shop-filtered.
+ */
+export async function listInFlightAttemptsOlderThan(
+  db: PrismaClient,
+  enqueuedBefore: Date,
+): Promise<BillingAttemptRecord[]> {
+  return db.billingCycleAttempt.findMany({
+    where: { status: { in: ["ENQUEUED", "CHARGING"] }, enqueuedAt: { lt: enqueuedBefore } },
+    orderBy: { enqueuedAt: "asc" },
+    take: 100,
+  });
+}
+
+/**
+ * Retention purge: delete TERMINAL billing-attempt rows older than `cutoff`.
+ * In-flight rows (ENQUEUED/CHARGING/REQUIRES_ACTION) are never purged — a
+ * row still doing its idempotency job must not lose it.
+ *
+ * Why deleting old rows can't break invariant #1 (never overbill): the local
+ * unique idempotency key is only one of three walls. A purged cycle can't be
+ * re-enqueued by the scheduler because Shopify's own billing cycle status is
+ * BILLED once charged, and both fetchDueCycle and fetchEarliestUnbilledCycle
+ * select UNBILLED cycles only — Shopify's durable cycle status is the wall
+ * that outlives our row. The retention floor in retention.server.ts also
+ * keeps this period comfortably longer than the scheduler's 400-day lookback.
+ */
+export async function deleteTerminalAttemptsOlderThan(
+  db: PrismaClient,
+  cutoff: Date,
+): Promise<{ deleted: number }> {
+  const result = await db.billingCycleAttempt.deleteMany({
+    where: {
+      status: { in: ["SUCCEEDED", "FAILED", "SKIPPED", "DEAD_LETTERED"] },
+      enqueuedAt: { lt: cutoff },
+    },
+  });
+  return { deleted: result.count };
 }
 
 /**
